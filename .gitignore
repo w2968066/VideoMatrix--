@@ -1,11 +1,23 @@
+# Python
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 
+# Build outputs
 build/
 dist/
-*.spec
+release/
 *.exe
 
+# PyInstaller specs are ignored by default; keep the backend one tracked
+*.spec
+!backend/videomatrix-backend.spec
+
+# Frontend
+node_modules/
+
+# Generated runtime files
 config.json
 usage_history.json
 media_cache.json
@@ -13,5 +25,8 @@ ffmpeg_error_log.txt
 stdout.txt
 stderr.txt
 
+# OS / IDE
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
