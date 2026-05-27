@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+
+build/
+dist/
+*.spec
+*.exe
+
+config.json
+usage_history.json
+media_cache.json
+ffmpeg_error_log.txt
+stdout.txt
+stderr.txt
+
+.DS_Store
+Thumbs.db
