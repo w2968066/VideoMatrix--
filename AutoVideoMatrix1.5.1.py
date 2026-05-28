@@ -596,6 +596,7 @@ class AppUI(tk.Tk):
 
     def _init_fonts(self):
         self.F_TITLE   = ("Segoe UI", 15, "bold")
+        self.F_CONTACT = ("Segoe UI", 11, "bold")
         self.F_SECTION = ("Segoe UI", 9, "bold")
         self.F_BODY    = ("Segoe UI", 9)
         self.F_SMALL   = ("Segoe UI", 8)
@@ -726,6 +727,9 @@ class AppUI(tk.Tk):
                  fg=C.TEXT, bg=C.BG).pack(side=tk.LEFT)
         tk.Label(hdr, text="v1.5.1", font=self.F_SMALL,
                  fg=C.TEXT_DIM, bg=C.BG).pack(side=tk.LEFT, padx=(6, 0), pady=(5, 0))
+        tk.Label(hdr, text="VX：18667026883", font=self.F_CONTACT,
+                 fg="#0E0E0E", bg=C.ACCENT, padx=12, pady=3).pack(
+                     side=tk.LEFT, padx=(14, 0), pady=(2, 0))
         # 不常用操作丢右上角
         self._theme_btn = tk.Button(hdr, text="Light", font=self.F_SMALL,
                                     fg=C.TEXT_DIM, bg=C.SURFACE2, bd=0,
