@@ -86,6 +86,8 @@ function createWindow() {
     maxWidth: 1280,
     maxHeight: 900,
     resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     title: 'VideoMatrix',
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),

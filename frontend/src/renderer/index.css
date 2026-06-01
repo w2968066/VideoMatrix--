@@ -5,17 +5,17 @@
 @layer base {
   :root {
     --ui-scale: 1.15;
-    --color-background: 10 10 15;
-    --color-background-elev: 19 19 26;
+    --color-background: 7 8 12;
+    --color-background-elev: 14 15 20;
     --color-foreground: 237 237 242;
-    --color-muted: 90 90 102;
-    --color-muted-foreground: 138 138 153;
+    --color-muted: 74 76 88;
+    --color-muted-foreground: 145 148 162;
     --color-border: 255 255 255;
     --color-border-hover: 255 255 255;
-    --color-accent: 232 166 88;
-    --color-accent-hover: 242 185 112;
-    --color-hot: 255 92 77;
-    --color-ok: 155 214 107;
+    --color-accent: 225 154 64;
+    --color-accent-hover: 239 176 91;
+    --color-hot: 221 82 68;
+    --color-ok: 126 190 92;
   }
 
   :root.theme-light {
@@ -53,9 +53,8 @@
     pointer-events: none;
     z-index: 0;
     background:
-      radial-gradient(70% 50% at 25% 0%, rgba(232, 166, 88, 0.06) 0%, transparent 55%),
-      radial-gradient(60% 45% at 100% 100%, rgba(120, 140, 220, 0.04) 0%, transparent 60%),
-      linear-gradient(180deg, rgba(255,255,255,0.015) 0%, transparent 35%);
+      radial-gradient(70% 50% at 18% 0%, rgba(225, 154, 64, 0.035) 0%, transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,0.018) 0%, transparent 38%);
   }
   :root.theme-light body::before {
     background:
@@ -68,6 +67,7 @@
     width: calc(100% / var(--ui-scale));
     height: calc(100% / var(--ui-scale));
     zoom: var(--ui-scale);
+    box-sizing: border-box;
   }
 
   ::-webkit-scrollbar { width: 8px; height: 8px; }
