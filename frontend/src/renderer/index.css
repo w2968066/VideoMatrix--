@@ -43,7 +43,6 @@
     background: rgb(var(--color-background));
     color: rgb(var(--color-foreground));
     -webkit-font-smoothing: antialiased;
-    zoom: var(--ui-scale);
   }
 
   /* layered backdrop — gives the page subtle depth without distracting */
@@ -64,6 +63,12 @@
       linear-gradient(180deg, rgba(255,255,255,0.62) 0%, transparent 45%);
   }
   #root { position: relative; z-index: 1; }
+
+  .ui-shell {
+    width: calc(100% / var(--ui-scale));
+    height: calc(100% / var(--ui-scale));
+    zoom: var(--ui-scale);
+  }
 
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }

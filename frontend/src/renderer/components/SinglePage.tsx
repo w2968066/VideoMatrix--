@@ -84,6 +84,9 @@ export default function SinglePage() {
   const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output'>('log')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
   const [fontScale, setFontScale] = useState(() => localStorage.getItem('vm-font-scale') || '100')
+  const [benchmarkRunning, setBenchmarkRunning] = useState(false)
+  const [benchmarkProgress, setBenchmarkProgress] = useState(0)
+  const [completionNotice, setCompletionNotice] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const taskStatusRef = useRef<Record<string, string>>({})
 
@@ -108,6 +111,8 @@ export default function SinglePage() {
       if (previous && previous !== task.status && task.status === 'completed') {
         addToast(`任务完成：${task.task_name}`, 'success')
         appendLog(`✅ ${new Date().toLocaleTimeString()} 任务完成：${task.task_name}`)
+        setCompletionNotice(task.task_name)
+        window.setTimeout(() => setCompletionNotice(null), 6500)
         setRightTab('output')
       }
       taskStatusRef.current[task.task_id] = task.status
@@ -182,10 +187,25 @@ export default function SinglePage() {
 
   const benchmark = async () => {
     const runConfig = ensureRunConfig()
-    if (!runConfig) return
+    if (!runConfig || benchmarkRunning) return
+
+    setBenchmarkRunning(true)
+    setBenchmarkProgress(1)
+    appendLog('>>> [压测] 正在测试 1%')
+    addToast('智能压测已开始', 'info')
+
+    const timer = window.setInterval(() => {
+      setBenchmarkProgress((p) => {
+        const next = Math.min(95, p + 7)
+        if (next % 14 === 0 || next === 95) appendLog(`>>> [压测] 正在测试 ${next}%`)
+        return next
+      })
+    }, 900)
+
     try {
       const res = await api.benchmark(runConfig)
       if (res.error) { addToast(res.error, 'error'); return }
+      setBenchmarkProgress(100)
       appendLog('>>> [压测] 智能压测完成')
       Object.values(res.results || {}).forEach((item: any) => {
         appendLog(`    - ${item.concurrent} 路并发总耗时: ${item.total_time} 秒，单视频平均: ${item.avg_per_video} 秒`)
@@ -193,7 +213,15 @@ export default function SinglePage() {
       appendLog(`✅ [压测完成] 最优节点为 ${res.best_concurrent} 路并发`)
       setConfig({ concurrent_tasks: res.best_concurrent })
       addToast(`最优并发 ${res.best_concurrent} 路`, 'success')
-    } catch (e: any) { addToast(e.message, 'error') }
+    } catch (e: any) {
+      addToast(e.message, 'error')
+    } finally {
+      window.clearInterval(timer)
+      window.setTimeout(() => {
+        setBenchmarkRunning(false)
+        setBenchmarkProgress(0)
+      }, 800)
+    }
   }
 
   const clearHistory = async () => {
@@ -226,7 +254,7 @@ export default function SinglePage() {
   // ──────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col w-full h-full overflow-hidden">
+    <div className="ui-shell flex flex-col overflow-hidden">
       {/* macOS hidden-titlebar drag region */}
       <div className="h-7 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
@@ -347,8 +375,8 @@ export default function SinglePage() {
                 <button type="button" onClick={stopRunning} disabled={running === 0} className="h-9 rounded-[2px] bg-hot px-3 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
                   停止
                 </button>
-                <button type="button" onClick={benchmark} className="mt-1 h-7 rounded-[2px] border border-white/[0.12] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent">
-                  智能压测
+                <button type="button" onClick={benchmark} disabled={benchmarkRunning} className="mt-1 h-7 rounded-[2px] border border-white/[0.12] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
+                  {benchmarkRunning ? `压测中 ${benchmarkProgress}%` : '智能压测'}
                 </button>
               </div>
             </div>
@@ -491,6 +519,13 @@ export default function SinglePage() {
           </div>
         </div>
       </div>
+
+      {completionNotice && (
+        <div className="fixed left-1/2 top-16 z-[1200] -translate-x-1/2 rounded-[6px] border border-ok/50 bg-[#10180f] px-7 py-4 text-center shadow-[0_20px_60px_-20px_rgba(155,214,107,0.8)]">
+          <div className="text-[16px] font-semibold text-ok">任务完成</div>
+          <div className="mt-1 max-w-[520px] truncate text-[12px] text-foreground/80">{completionNotice}</div>
+        </div>
+      )}
 
     </div>
   )
