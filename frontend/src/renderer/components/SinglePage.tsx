@@ -93,11 +93,24 @@ export default function SinglePage() {
   const { config, setConfig, tasks, logs, appendLog, clearLogs, addToast, scannedFiles } = useStore()
   const [isRunning, setIsRunning] = useState(false)
   const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output'>('log')
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
+  const [fontScale, setFontScale] = useState(() => localStorage.getItem('vm-font-scale') || '100')
   const logRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [logs])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('theme-light', theme === 'light')
+    localStorage.setItem('vm-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    const normalized = Math.min(140, Math.max(80, Number(fontScale) || 100))
+    document.documentElement.style.setProperty('--ui-scale', String(normalized / 100))
+    localStorage.setItem('vm-font-scale', String(normalized))
+  }, [fontScale])
 
   const running = tasks.filter(t => t.status === 'running').length
   const allOutputFiles = tasks.flatMap(t => t.output_files)
@@ -176,14 +189,33 @@ export default function SinglePage() {
               VX：18667026883
             </span>
           </div>
-          <span className="shrink-0 text-[11px] font-mono text-muted-foreground">
-            {running > 0 ? (
-              <span className="text-accent inline-flex items-center gap-1.5">
-                <span className="w-1 h-1 rounded-full bg-accent animate-pulse-dot" />
-                {running} 运行中
-              </span>
-            ) : '就绪'}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              字体
+              <input
+                value={fontScale}
+                onChange={(e) => setFontScale(e.target.value)}
+                onBlur={() => setFontScale(String(Math.min(140, Math.max(80, Number(fontScale) || 100))))}
+                className="h-7 w-14 rounded-[4px] border border-white/[0.10] bg-black/20 px-2 text-right font-mono text-[11px] text-foreground outline-none focus:border-accent/60"
+              />
+              %
+            </label>
+            <button
+              type="button"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="h-7 rounded-[4px] border border-white/[0.10] px-2.5 text-[11px] text-foreground/85 hover:border-accent/60 hover:text-accent"
+            >
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
+            <span className="min-w-16 text-right text-[11px] font-mono text-muted-foreground">
+              {running > 0 ? (
+                <span className="text-accent inline-flex items-center gap-1.5">
+                  <span className="w-1 h-1 rounded-full bg-accent animate-pulse-dot" />
+                  {running} 运行中
+                </span>
+              ) : '就绪'}
+            </span>
+          </div>
         </div>
 
         {/* TWO COLUMNS: left controls / right telemetry */}

@@ -7,17 +7,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#0A0A0F',
-        'background-elev': '#13131A',
-        foreground: '#EDEDF2',
-        muted: '#5A5A66',
-        'muted-foreground': '#8A8A99',
-        border: 'rgba(255,255,255,0.10)',
-        'border-hover': 'rgba(255,255,255,0.18)',
-        accent: '#E8A658',
-        'accent-hover': '#F2B970',
-        hot: '#FF5C4D',
-        ok: '#9BD66B',
+        background: 'rgb(var(--color-background) / <alpha-value>)',
+        'background-elev': 'rgb(var(--color-background-elev) / <alpha-value>)',
+        foreground: 'rgb(var(--color-foreground) / <alpha-value>)',
+        muted: 'rgb(var(--color-muted) / <alpha-value>)',
+        'muted-foreground': 'rgb(var(--color-muted-foreground) / <alpha-value>)',
+        border: 'rgb(var(--color-border) / <alpha-value>)',
+        'border-hover': 'rgb(var(--color-border-hover) / <alpha-value>)',
+        accent: 'rgb(var(--color-accent) / <alpha-value>)',
+        'accent-hover': 'rgb(var(--color-accent-hover) / <alpha-value>)',
+        hot: 'rgb(var(--color-hot) / <alpha-value>)',
+        ok: 'rgb(var(--color-ok) / <alpha-value>)',
       },
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"Microsoft YaHei UI"', '"PingFang SC"', 'sans-serif'],

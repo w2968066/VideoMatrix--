@@ -3,6 +3,35 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --ui-scale: 1;
+    --color-background: 10 10 15;
+    --color-background-elev: 19 19 26;
+    --color-foreground: 237 237 242;
+    --color-muted: 90 90 102;
+    --color-muted-foreground: 138 138 153;
+    --color-border: 255 255 255;
+    --color-border-hover: 255 255 255;
+    --color-accent: 232 166 88;
+    --color-accent-hover: 242 185 112;
+    --color-hot: 255 92 77;
+    --color-ok: 155 214 107;
+  }
+
+  :root.theme-light {
+    --color-background: 244 245 247;
+    --color-background-elev: 255 255 255;
+    --color-foreground: 25 28 34;
+    --color-muted: 126 132 143;
+    --color-muted-foreground: 85 91 104;
+    --color-border: 20 24 32;
+    --color-border-hover: 20 24 32;
+    --color-accent: 181 110 32;
+    --color-accent-hover: 151 88 24;
+    --color-hot: 204 55 45;
+    --color-ok: 76 145 48;
+  }
+
   html, body, #root {
     width: 100%;
     height: 100%;
@@ -11,9 +40,10 @@
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
-    background: #07070A;
-    color: #EDEDF2;
+    background: rgb(var(--color-background));
+    color: rgb(var(--color-foreground));
     -webkit-font-smoothing: antialiased;
+    zoom: var(--ui-scale);
   }
 
   /* layered backdrop — gives the page subtle depth without distracting */
@@ -27,6 +57,11 @@
       radial-gradient(70% 50% at 25% 0%, rgba(232, 166, 88, 0.06) 0%, transparent 55%),
       radial-gradient(60% 45% at 100% 100%, rgba(120, 140, 220, 0.04) 0%, transparent 60%),
       linear-gradient(180deg, rgba(255,255,255,0.015) 0%, transparent 35%);
+  }
+  :root.theme-light body::before {
+    background:
+      radial-gradient(70% 50% at 25% 0%, rgba(181, 110, 32, 0.08) 0%, transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,0.62) 0%, transparent 45%);
   }
   #root { position: relative; z-index: 1; }
 
