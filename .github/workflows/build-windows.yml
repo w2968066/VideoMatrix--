@@ -77,8 +77,6 @@ jobs:
       # ── Frontend installer (NSIS) — pulls backend exe in via extraResources
       - name: Package Electron app
         working-directory: frontend
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: npx electron-builder --win --publish never
 
       - name: Upload workflow artifact
