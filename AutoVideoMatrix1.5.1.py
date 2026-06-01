@@ -39,6 +39,15 @@ def _find_tool(name):
 FFMPEG  = _find_tool('ffmpeg.exe')
 FFPROBE = _find_tool('ffprobe.exe')
 
+APP_STATE_DIR = os.path.join(
+    os.environ.get('APPDATA') or os.path.expanduser('~'),
+    'VideoMatrix'
+)
+os.makedirs(APP_STATE_DIR, exist_ok=True)
+
+def _state_path(filename):
+    return os.path.join(APP_STATE_DIR, filename)
+
 # ==========================================
 # Windows DWM Acrylic 毛玻璃
 # ==========================================
@@ -145,35 +154,37 @@ class SharedMediaCache:
     def __init__(self):
         self.media_cache = {}
         self.usage_history = set()
+        self.media_cache_file = _state_path('media_cache.json')
+        self.usage_history_file = _state_path('usage_history.json')
         self.lock = threading.Lock()
         self.load_state()
 
     def load_state(self):
-        if os.path.exists('media_cache.json'):
+        if os.path.exists(self.media_cache_file):
             try:
-                with open('media_cache.json', 'r', encoding='utf-8') as f:
+                with open(self.media_cache_file, 'r', encoding='utf-8') as f:
                     self.media_cache = json.load(f)
             except: pass
-        if os.path.exists('usage_history.json'):
+        if os.path.exists(self.usage_history_file):
             try:
-                with open('usage_history.json', 'r', encoding='utf-8') as f:
+                with open(self.usage_history_file, 'r', encoding='utf-8') as f:
                     self.usage_history = set(json.load(f))
             except: pass
 
     def save_state(self):
         with self.lock:
             try:
-                with open('media_cache.json', 'w', encoding='utf-8') as f:
+                with open(self.media_cache_file, 'w', encoding='utf-8') as f:
                     json.dump(self.media_cache, f, ensure_ascii=False)
-                with open('usage_history.json', 'w', encoding='utf-8') as f:
+                with open(self.usage_history_file, 'w', encoding='utf-8') as f:
                     json.dump(list(self.usage_history), f, ensure_ascii=False)
             except Exception: pass
 
     def clear_history(self):
         with self.lock:
             self.usage_history.clear()
-            if os.path.exists('usage_history.json'):
-                os.remove('usage_history.json')
+            if os.path.exists(self.usage_history_file):
+                os.remove(self.usage_history_file)
 
 # ==========================================
 # 核心逻辑模块：单库视频处理实例
@@ -553,8 +564,10 @@ class AppUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("VideoMatrix")
-        self.geometry("980x840")
-        self.minsize(860, 720)
+        self.base_width = 1040
+        self.base_height = 850
+        self.geometry(f"{self.base_width}x{self.base_height}")
+        self.resizable(False, False)
         self.configure(bg=C.BG)
         self._theme = 'dark'
 
@@ -562,7 +575,8 @@ class AppUI(tk.Tk):
         self.active_cores = []
         self.cores_lock = threading.Lock()
         self.is_pipeline_running = False
-        self.config_file = "config.json"
+        self.config_file = _state_path("config.json")
+        self._rebuilding = False
 
         self.vars = {
             'hook_dir': tk.StringVar(), 'body_dir': tk.StringVar(), 'bgm_dir': tk.StringVar(),
@@ -577,10 +591,12 @@ class AppUI(tk.Tk):
             'resolution': tk.StringVar(value="1080x1920"), 'res_tag': tk.StringVar(value="1080P"),
             'fps': tk.StringVar(value="30"), 'bitrate': tk.StringVar(value="8000k"),
             'vol_orig': tk.IntVar(value=0), 'vol_bgm': tk.IntVar(value=100),
-            'vol_voice': tk.IntVar(value=100)
+            'vol_voice': tk.IntVar(value=100),
+            'font_scale': tk.IntVar(value=100),
         }
 
         self.vars['resolution'].trace_add('write', self.update_res_tag)
+        self.vars['font_scale'].trace_add('write', self._on_font_scale_change)
 
         self._init_fonts()
         self._try_acrylic()
@@ -590,19 +606,69 @@ class AppUI(tk.Tk):
         self.load_config()
 
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - 980) // 2
-        y = (self.winfo_screenheight() - 840) // 2
-        self.geometry(f"+{x}+{y}")
+        self._apply_window_size(center=True)
+
+    def _font_size(self, base):
+        try:
+            scale = max(90, min(120, int(self.vars['font_scale'].get()))) / 100
+        except Exception:
+            scale = 1
+        return max(7, int(round(base * scale)))
 
     def _init_fonts(self):
-        self.F_TITLE   = ("Segoe UI", 15, "bold")
-        self.F_CONTACT = ("Segoe UI", 11, "bold")
-        self.F_SECTION = ("Segoe UI", 9, "bold")
-        self.F_BODY    = ("Segoe UI", 9)
-        self.F_SMALL   = ("Segoe UI", 8)
-        self.F_MONO    = ("Cascadia Code", 9)
-        self.F_BTN     = ("Segoe UI", 9, "bold")
-        self.F_BTN_SM  = ("Segoe UI", 8, "bold")
+        self.F_TITLE   = ("Segoe UI", self._font_size(15), "bold")
+        self.F_CONTACT = ("Segoe UI", self._font_size(11), "bold")
+        self.F_SECTION = ("Segoe UI", self._font_size(9), "bold")
+        self.F_BODY    = ("Segoe UI", self._font_size(9))
+        self.F_SMALL   = ("Segoe UI", self._font_size(8))
+        self.F_MONO    = ("Cascadia Code", self._font_size(9))
+        self.F_BTN     = ("Segoe UI", self._font_size(9), "bold")
+        self.F_BTN_SM  = ("Segoe UI", self._font_size(8), "bold")
+
+    def _apply_window_size(self, center=False):
+        try:
+            scale = max(90, min(120, int(self.vars['font_scale'].get()))) / 100
+        except Exception:
+            scale = 1
+        w = int(self.base_width * scale)
+        h = int(self.base_height * scale)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w = min(w, max(920, sw - 80))
+        h = min(h, max(760, sh - 100))
+        if center:
+            x = max(0, (sw - w) // 2)
+            y = max(0, (sh - h) // 2)
+            self.geometry(f"{w}x{h}+{x}+{y}")
+        else:
+            self.geometry(f"{w}x{h}")
+
+    def _on_font_scale_change(self, *args):
+        if not hasattr(self, 'txt_log') or getattr(self, '_rebuilding', False):
+            return
+        try:
+            scale = int(self.vars['font_scale'].get())
+        except Exception:
+            return
+        if scale < 90 or scale > 120:
+            return
+        self._rebuild_ui()
+
+    def _rebuild_ui(self):
+        self._rebuilding = True
+        log_text = self.txt_log.get(1.0, tk.END) if hasattr(self, 'txt_log') else ''
+        running = self.is_pipeline_running
+        self._init_fonts()
+        for child in self.winfo_children():
+            child.destroy()
+        self._apply_window_size()
+        self.create_widgets()
+        self.txt_log.config(state=tk.NORMAL)
+        self.txt_log.insert(tk.END, log_text)
+        self.txt_log.config(state=tk.DISABLED)
+        if running:
+            self.toggle_ui_state(running=True)
+        self._try_acrylic()
+        self._rebuilding = False
 
     def _try_acrylic(self):
         if sys.platform != 'win32':
@@ -626,32 +692,13 @@ class AppUI(tk.Tk):
 
     def _toggle_theme(self):
         """切换 Dark / Light 配色并重建 UI。"""
-        log_text = self.txt_log.get(1.0, tk.END)
-        running = self.is_pipeline_running
-
         if self._theme == 'dark':
             C.set_light()
             self._theme = 'light'
         else:
             C.set_dark()
             self._theme = 'dark'
-
-        # 销毁全部子控件后重建
-        for child in self.winfo_children():
-            child.destroy()
-        self.create_widgets()
-
-        # 还原日志
-        self.txt_log.config(state=tk.NORMAL)
-        self.txt_log.insert(tk.END, log_text)
-        self.txt_log.config(state=tk.DISABLED)
-
-        # 还原运行状态
-        if running:
-            self.toggle_ui_state(running=True)
-
-        # 重建后重刷毛玻璃
-        self._try_acrylic()
+        self._rebuild_ui()
 
     # ===== 基础组件 =====
 
@@ -731,12 +778,20 @@ class AppUI(tk.Tk):
                  fg="#0E0E0E", bg=C.ACCENT, padx=12, pady=3).pack(
                      side=tk.LEFT, padx=(14, 0), pady=(2, 0))
         # 不常用操作丢右上角
-        self._theme_btn = tk.Button(hdr, text="Light", font=self.F_SMALL,
+        self._theme_btn = tk.Button(hdr, text=("Light" if self._theme == 'dark' else "Dark"), font=self.F_SMALL,
                                     fg=C.TEXT_DIM, bg=C.SURFACE2, bd=0,
                                     activebackground=C.BORDER, activeforeground=C.TEXT,
                                     relief="flat", padx=10, pady=2, cursor="hand2",
                                     command=self._toggle_theme)
         self._theme_btn.pack(side=tk.RIGHT, padx=(0, 4))
+
+        font_box = tk.Frame(hdr, bg=C.BG)
+        font_box.pack(side=tk.RIGHT, padx=(0, 8))
+        tk.Label(font_box, text="字体", font=self.F_SMALL,
+                 fg=C.TEXT_DIM, bg=C.BG).pack(side=tk.LEFT, padx=(0, 3))
+        self._input(font_box, self.vars['font_scale'], width=4).pack(side=tk.LEFT)
+        tk.Label(font_box, text="%", font=self.F_SMALL,
+                 fg=C.TEXT_DIM, bg=C.BG).pack(side=tk.LEFT, padx=(3, 0))
 
         self.btn_bench = tk.Button(hdr, text="智能压测", font=self.F_SMALL,
                                    fg=C.TEXT_DIM, bg=C.SURFACE2, bd=0,
@@ -761,7 +816,7 @@ class AppUI(tk.Tk):
             ("全局配音库 Voice", 'voice_dir',      'dir'),
             ("字幕库 SRT",       'srt_dir',        'dir'),
             ("水印图片 / GIF",   'watermark_path', 'file'),
-            ("导出父目录 Output",'base_out_dir',   'dir'),
+            ("导出父目录(可空)",'base_out_dir',   'dir'),
         ]
         for i, (label, var, mode) in enumerate(rows):
             # 硬字幕开关放到标签左侧
@@ -926,19 +981,41 @@ class AppUI(tk.Tk):
     # ========================================================
 
     def load_config(self):
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    saved_data = json.load(f)
-                    for k, v in saved_data.items():
-                        if k in self.vars and k != 'res_tag': self.vars[k].set(v)
-                self.log(">>> 成功读取上次的配置文件！")
-            except Exception as e:
-                self.log(f"WARNING: 读取配置文件失败 -> {e}")
+        candidates = [
+            self.config_file,
+            os.path.join(os.getcwd(), "config.json"),
+            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "config.json"),
+        ]
+        config_path = next((p for p in candidates if p and os.path.exists(p)), None)
+        if not config_path:
+            return
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                saved_data = json.load(f)
+            self._rebuilding = True
+            for k, v in saved_data.items():
+                if k in self.vars and k != 'res_tag':
+                    self.vars[k].set(v)
+            saved_theme = saved_data.get('_theme')
+            if saved_theme == 'light':
+                C.set_light()
+                self._theme = 'light'
+            else:
+                C.set_dark()
+                self._theme = 'dark'
+            self._rebuilding = False
+            self._rebuild_ui()
+            if config_path != self.config_file:
+                self.save_config()
+            self.log(">>> 成功读取上次的配置文件！")
+        except Exception as e:
+            self._rebuilding = False
+            self.log(f"WARNING: 读取配置文件失败 -> {e}")
 
     def save_config(self):
         try:
             saved_data = {k: v.get() for k, v in self.vars.items() if k != 'res_tag'}
+            saved_data['_theme'] = self._theme
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(saved_data, f, ensure_ascii=False, indent=4)
         except Exception as e:
@@ -1030,10 +1107,15 @@ class AppUI(tk.Tk):
             messagebox.showerror("配置错误", "水印文件路径不存在！不需要请留空。")
             return None
         out_dir = config['base_out_dir']
-        if out_dir: os.makedirs(out_dir, exist_ok=True)
-        else:
-            messagebox.showerror("配置错误", "请指定导出父目录！")
-            return None
+        if not out_dir:
+            h_dir = config['hook_dir'].rstrip('/\\')
+            parent = os.path.dirname(h_dir) or h_dir
+            name = os.path.basename(h_dir) or "VideoMatrix"
+            out_dir = os.path.join(parent, f"{name}_VideoMatrix_Output")
+            config['base_out_dir'] = out_dir
+            self.vars['base_out_dir'].set(out_dir)
+            self.log(f">>> 未填写导出父目录，已自动使用: {out_dir}")
+        os.makedirs(out_dir, exist_ok=True)
         return config
 
     def toggle_ui_state(self, running=False):
