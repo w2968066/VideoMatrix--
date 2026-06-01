@@ -64,11 +64,12 @@ interface AssetCardProps {
   required?: boolean
   onBrowse: () => void
   onChange: (value: string) => void
+  onOpen?: () => void
   onClear?: () => void
   pickAction?: string
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onClear, pickAction = '浏览' }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览' }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -82,16 +83,21 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
       )}
     >
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <div
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={!filled || !onOpen}
+          title={filled ? '打开路径' : undefined}
           className={cn(
-            'w-7 h-7 rounded-[4px] flex items-center justify-center shrink-0',
+            'w-7 h-7 rounded-[4px] flex items-center justify-center shrink-0 transition-colors',
             filled
-              ? 'bg-accent/14 text-accent ring-1 ring-inset ring-accent/25'
-              : 'bg-white/[0.035] text-muted-foreground'
+              ? 'bg-accent/14 text-accent ring-1 ring-inset ring-accent/25 hover:bg-accent/25'
+              : 'bg-white/[0.035] text-muted-foreground',
+            (!filled || !onOpen) && 'cursor-default'
           )}
         >
           <span className="w-[15px] h-[15px] block">{AssetIcons[kind]}</span>
-        </div>
+        </button>
         <label className="w-[76px] shrink-0 text-[11px] text-foreground/85">
           {label}
           {required && !filled && <span className="ml-1 text-hot/85">必填</span>}

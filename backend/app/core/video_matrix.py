@@ -83,6 +83,8 @@ class VideoMatrixCore:
         self.bgm_pool: List[dict] = []
         self.voice_pool: List[dict] = []
         self.n_total = 0
+        self.last_output_path: Optional[str] = None
+        self.last_elapsed: Optional[float] = None
 
         self.is_running = True
         self.current_process = None
@@ -425,6 +427,8 @@ class VideoMatrixCore:
                     self.shared.usage_history.add(hook_clip['id'])
                 self.shared.save_state()
             elapsed_time = time.time() - start_time
+            self.last_output_path = out_path
+            self.last_elapsed = round(elapsed_time, 1)
             now_str = datetime.now().strftime("%H:%M:%S")
             self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 完成，耗时 {elapsed_time:.1f} 秒 -> {out_name}")
             return True

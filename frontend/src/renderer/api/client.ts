@@ -58,6 +58,7 @@ export interface TaskStatus {
   created_at: string
   updated_at?: string
   output_files: string[]
+  output_elapsed?: Record<string, number>
 }
 
 export const api = {

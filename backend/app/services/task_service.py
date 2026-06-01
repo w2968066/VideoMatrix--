@@ -194,12 +194,11 @@ class TaskService:
             return False
         result = core.render_single_video(idx)
         if result and status.task_id in self.tasks:
-            out_dir = core.config['out_dir']
-            for f in os.listdir(out_dir):
-                if f.startswith(core.task_name) and f.endswith('.mp4'):
-                    full = os.path.join(out_dir, f)
-                    if full not in self.tasks[status.task_id].output_files:
-                        self.tasks[status.task_id].output_files.append(full)
+            if core.last_output_path:
+                if core.last_output_path not in self.tasks[status.task_id].output_files:
+                    self.tasks[status.task_id].output_files.append(core.last_output_path)
+                if core.last_elapsed is not None:
+                    self.tasks[status.task_id].output_elapsed[core.last_output_path] = core.last_elapsed
         return result
 
     def stop_task(self, task_id: str) -> bool:

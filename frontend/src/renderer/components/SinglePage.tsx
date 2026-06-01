@@ -85,6 +85,7 @@ export default function SinglePage() {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
   const [fontScale, setFontScale] = useState(() => localStorage.getItem('vm-font-scale') || '100')
   const logRef = useRef<HTMLDivElement>(null)
+  const taskStatusRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
@@ -96,18 +97,39 @@ export default function SinglePage() {
   }, [theme])
 
   useEffect(() => {
-    const maxByWindow = Math.floor(Math.min(window.innerWidth / 1200, window.innerHeight / 860) * 100)
-    const maxScale = Math.min(120, Math.max(90, maxByWindow))
-    const normalized = Math.min(maxScale, Math.max(80, Number(fontScale) || 100))
+    const normalized = Math.min(125, Math.max(80, Number(fontScale) || 100))
     document.documentElement.style.setProperty('--ui-scale', String(normalized / 100))
     localStorage.setItem('vm-font-scale', String(normalized))
   }, [fontScale])
 
+  useEffect(() => {
+    tasks.forEach((task) => {
+      const previous = taskStatusRef.current[task.task_id]
+      if (previous && previous !== task.status && task.status === 'completed') {
+        addToast(`任务完成：${task.task_name}`, 'success')
+        appendLog(`✅ ${new Date().toLocaleTimeString()} 任务完成：${task.task_name}`)
+        setRightTab('output')
+      }
+      taskStatusRef.current[task.task_id] = task.status
+    })
+  }, [tasks, addToast, appendLog])
+
   const running = tasks.filter(t => t.status === 'running').length
-  const allOutputFiles = tasks.flatMap(t => t.output_files)
+  const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
+    file,
+    elapsed: t.output_elapsed?.[file],
+  })))
   const setParam = (key: string, raw: string) => setConfig({ [key]: raw } as any)
   const splitPathList = (raw: string) =>
     raw.split(';').map(p => p.trim()).filter(Boolean)
+  const openConfiguredPath = (raw: string, fileMode = false) => {
+    const paths = splitPathList(raw)
+    paths.forEach((p) => {
+      if (!p) return
+      const target = fileMode ? p.replace(/[\\/][^\\/]*$/, '') : p
+      window.electronAPI?.openPath(target)
+    })
+  }
   const ensureRunConfig = () => {
     if (!config.hook_dir || !config.bgm_dir) {
       addToast('请填写 Hook 和 BGM', 'warning')
@@ -164,6 +186,11 @@ export default function SinglePage() {
     try {
       const res = await api.benchmark(runConfig)
       if (res.error) { addToast(res.error, 'error'); return }
+      appendLog('>>> [压测] 智能压测完成')
+      Object.values(res.results || {}).forEach((item: any) => {
+        appendLog(`    - ${item.concurrent} 路并发总耗时: ${item.total_time} 秒，单视频平均: ${item.avg_per_video} 秒`)
+      })
+      appendLog(`✅ [压测完成] 最优节点为 ${res.best_concurrent} 路并发`)
       setConfig({ concurrent_tasks: res.best_concurrent })
       addToast(`最优并发 ${res.best_concurrent} 路`, 'success')
     } catch (e: any) { addToast(e.message, 'error') }
@@ -219,9 +246,7 @@ export default function SinglePage() {
                 value={fontScale}
                 onChange={(e) => setFontScale(e.target.value)}
                 onBlur={() => {
-                  const maxByWindow = Math.floor(Math.min(window.innerWidth / 1200, window.innerHeight / 860) * 100)
-                  const maxScale = Math.min(120, Math.max(90, maxByWindow))
-                  setFontScale(String(Math.min(maxScale, Math.max(80, Number(fontScale) || 100))))
+                  setFontScale(String(Math.min(125, Math.max(80, Number(fontScale) || 100))))
                 }}
                 className="h-7 w-14 rounded-[4px] border border-white/[0.10] bg-black/20 px-2 text-right font-mono text-[11px] text-foreground outline-none focus:border-accent/60"
               />
@@ -256,24 +281,31 @@ export default function SinglePage() {
               <div className="grid grid-cols-1 gap-2">
                 <AssetCard kind="hook"      label="Hook 首段" value={config.hook_dir}             count={scannedFiles.hook?.count} required
                   onChange={(v) => setConfig({ hook_dir: v })}
+                  onOpen={() => openConfiguredPath(config.hook_dir)}
                   onBrowse={() => browse('hook_dir')}        onClear={() => setConfig({ hook_dir: '' })} />
                 <AssetCard kind="body"      label="Body 后段" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count}
                   onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
+                  onOpen={() => openConfiguredPath(config.body_dirs.join('; '))}
                   onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
                 <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required
                   onChange={(v) => setConfig({ bgm_dir: v })}
+                  onOpen={() => openConfiguredPath(config.bgm_dir)}
                   onBrowse={() => browse('bgm_dir')}         onClear={() => setConfig({ bgm_dir: '' })} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
                   onChange={(v) => setConfig({ voice_dir: v })}
+                  onOpen={() => openConfiguredPath(config.voice_dir || '')}
                   onBrowse={() => browse('voice_dir')}       onClear={() => setConfig({ voice_dir: '' })} />
                 <AssetCard kind="srt"       label="字幕"      value={config.srt_dir || ''}
                   onChange={(v) => setConfig({ srt_dir: v })}
+                  onOpen={() => openConfiguredPath(config.srt_dir || '')}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '' })} />
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
+                  onOpen={() => openConfiguredPath(config.watermark_path || '', true)}
                   onBrowse={() => browseFile('watermark_path')} onClear={() => setConfig({ watermark_path: '' })} />
                 <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir}
                   onChange={(v) => setConfig({ base_out_dir: v })}
+                  onOpen={() => openConfiguredPath(config.base_out_dir)}
                   onBrowse={() => browse('base_out_dir')}    onClear={() => setConfig({ base_out_dir: '' })} />
               </div>
             </Group>
@@ -354,7 +386,7 @@ export default function SinglePage() {
               {([
                 { k: 'log',    label: '日志', count: logs.length },
                 { k: 'tasks',  label: '任务', count: tasks.length },
-                { k: 'output', label: '产出', count: allOutputFiles.length },
+                { k: 'output', label: '产出', count: allOutputItems.length },
               ] as const).map(t => (
                 <button
                   key={t.k}
@@ -426,12 +458,12 @@ export default function SinglePage() {
               {/* OUTPUT */}
               {rightTab === 'output' && (
                 <div className="absolute inset-0 overflow-auto px-4 py-2 bg-black/25">
-                  {allOutputFiles.length === 0 ? (
+                  {allOutputItems.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-muted-foreground/60 text-[12px]">
                       暂无产出
                     </div>
                   ) : (
-                    allOutputFiles.map((f, i) => (
+                    allOutputItems.map(({ file: f, elapsed }, i) => (
                       <div key={i} className="flex items-center gap-2 py-1.5 border-b border-white/[0.04] last:border-0">
                         <span className="text-[10px] text-muted-foreground font-mono tabular-nums w-6">
                           {String(i + 1).padStart(2, '0')}
@@ -439,6 +471,11 @@ export default function SinglePage() {
                         <span className="flex-1 text-[11px] text-foreground/85 font-mono truncate">
                           {f.split('/').pop()}
                         </span>
+                        {elapsed !== undefined && (
+                          <span className="w-14 text-right text-[10px] font-mono text-accent">
+                            {elapsed}s
+                          </span>
+                        )}
                         <button
                           onClick={() => window.electronAPI?.openPath(f)}
                           className="text-[10px] text-muted-foreground hover:text-accent transition-colors px-1.5"

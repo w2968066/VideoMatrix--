@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Union
+from typing import Dict, List, Optional, Literal, Union
 from datetime import datetime
 
 
@@ -47,6 +47,7 @@ class TaskStatus(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
     output_files: List[str] = Field(default_factory=list)
+    output_elapsed: Dict[str, float] = Field(default_factory=dict)
 
 
 class ProbeResult(BaseModel):
