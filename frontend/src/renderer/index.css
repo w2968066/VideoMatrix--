@@ -64,8 +64,8 @@
   #root { position: relative; z-index: 1; }
 
   .ui-shell {
-    width: calc(100% / var(--ui-scale));
-    height: calc(100% / var(--ui-scale));
+    width: 100%;
+    height: 100%;
     zoom: var(--ui-scale);
     box-sizing: border-box;
   }

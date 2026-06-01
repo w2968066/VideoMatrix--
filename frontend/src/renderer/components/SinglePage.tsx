@@ -280,7 +280,7 @@ export default function SinglePage() {
         </div>
 
         {/* TWO COLUMNS: left controls / right telemetry */}
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(660px,1fr)_340px] gap-3">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(660px,0.68fr)_minmax(360px,0.32fr)] gap-3">
 
           {/* ─── LEFT: configuration ─── */}
           <div className="flex flex-col gap-2 min-h-0 overflow-hidden">
@@ -363,8 +363,8 @@ export default function SinglePage() {
             </div>
 
             {/* Output */}
-            <Group title="输出">
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+            <Group title="输出" className="flex min-h-0 flex-1 flex-col">
+              <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
