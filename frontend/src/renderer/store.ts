@@ -61,15 +61,29 @@ const defaultConfig: VideoConfig = {
   concurrent_tasks: 3,
 }
 
+function loadSavedConfig(): VideoConfig {
+  try {
+    const raw = localStorage.getItem('vm-config')
+    if (!raw) return { ...defaultConfig }
+    return { ...defaultConfig, ...JSON.parse(raw) }
+  } catch {
+    return { ...defaultConfig }
+  }
+}
+
 let toastId = 0
 
 export const useStore = create<AppState>((set) => ({
   currentPage: 'dashboard',
   setPage: (page) => set({ currentPage: page }),
 
-  config: { ...defaultConfig },
+  config: loadSavedConfig(),
   setConfig: (partial) =>
-    set((state) => ({ config: { ...state.config, ...partial } })),
+    set((state) => {
+      const config = { ...state.config, ...partial }
+      localStorage.setItem('vm-config', JSON.stringify(config))
+      return { config }
+    }),
 
   tasks: [],
   currentTaskId: null,

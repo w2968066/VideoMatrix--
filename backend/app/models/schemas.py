@@ -11,7 +11,7 @@ class VideoConfig(BaseModel):
     voice_dir: Optional[str] = Field(default=None, description="配音目录")
     srt_dir: Optional[str] = Field(default=None, description="字幕目录")
     watermark_path: Optional[str] = Field(default=None, description="水印图片/GIF路径")
-    base_out_dir: str = Field(..., description="输出父目录")
+    base_out_dir: str = Field(default="", description="输出父目录")
     
     t_hook: float = Field(default=3.0, ge=0.5, description="首段时长(秒)")
     t_body: float = Field(default=3.0, ge=0.5, description="后段片段时长(秒)")
@@ -32,6 +32,7 @@ class VideoConfig(BaseModel):
     
     enable_srt: bool = Field(default=False, description="是否启用硬字幕")
     enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
+    concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 
 
 class TaskStatus(BaseModel):

@@ -16,25 +16,37 @@ from .ffmpeg import (
     build_filter_complex, render_video
 )
 
+APP_STATE_DIR = os.path.join(
+    os.environ.get('APPDATA') or os.path.expanduser('~'),
+    'VideoMatrix'
+)
+os.makedirs(APP_STATE_DIR, exist_ok=True)
+
+
+def state_path(filename: str) -> str:
+    return os.path.join(APP_STATE_DIR, filename)
+
 
 class SharedMediaCache:
     """全局线程安全缓存管理"""
     def __init__(self):
         self.media_cache: Dict[str, dict] = {}
         self.usage_history: set = set()
+        self.media_cache_file = state_path('media_cache.json')
+        self.usage_history_file = state_path('usage_history.json')
         self.lock = threading.Lock()
         self.load_state()
 
     def load_state(self):
-        if os.path.exists('media_cache.json'):
+        if os.path.exists(self.media_cache_file):
             try:
-                with open('media_cache.json', 'r', encoding='utf-8') as f:
+                with open(self.media_cache_file, 'r', encoding='utf-8') as f:
                     self.media_cache = json.load(f)
             except Exception:
                 pass
-        if os.path.exists('usage_history.json'):
+        if os.path.exists(self.usage_history_file):
             try:
-                with open('usage_history.json', 'r', encoding='utf-8') as f:
+                with open(self.usage_history_file, 'r', encoding='utf-8') as f:
                     self.usage_history = set(json.load(f))
             except Exception:
                 pass
@@ -42,9 +54,9 @@ class SharedMediaCache:
     def save_state(self):
         with self.lock:
             try:
-                with open('media_cache.json', 'w', encoding='utf-8') as f:
+                with open(self.media_cache_file, 'w', encoding='utf-8') as f:
                     json.dump(self.media_cache, f, ensure_ascii=False)
-                with open('usage_history.json', 'w', encoding='utf-8') as f:
+                with open(self.usage_history_file, 'w', encoding='utf-8') as f:
                     json.dump(list(self.usage_history), f, ensure_ascii=False)
             except Exception:
                 pass
@@ -52,8 +64,8 @@ class SharedMediaCache:
     def clear_history(self):
         with self.lock:
             self.usage_history.clear()
-            if os.path.exists('usage_history.json'):
-                os.remove('usage_history.json')
+            if os.path.exists(self.usage_history_file):
+                os.remove(self.usage_history_file)
 
 
 class VideoMatrixCore:

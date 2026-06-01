@@ -111,6 +111,12 @@ export const api = {
       body: JSON.stringify(config),
     }),
 
+  preflight: (config: VideoConfig) =>
+    request<any>('/preflight', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+
   clearHistory: () =>
     request<{ message: string }>('/history/clear', { method: 'POST' }),
 }

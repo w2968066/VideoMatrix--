@@ -60,6 +60,18 @@ function ParamRow({ label, value, suffix, onChange, placeholder }: {
   )
 }
 
+function getResolutionTag(value: string) {
+  const normalized = value.toLowerCase().replace('*', 'x')
+  const parts = normalized.split('x').map((v) => parseInt(v, 10))
+  if (parts.length !== 2 || parts.some(Number.isNaN)) return '?'
+  const pixels = parts[0] * parts[1]
+  if (pixels >= 3840 * 2160 * 0.9) return '4K'
+  if (pixels >= 2560 * 1440 * 0.9) return '2K'
+  if (pixels >= 1920 * 1080 * 0.9) return '1080P'
+  if (pixels >= 1280 * 720 * 0.9) return '720P'
+  return '标清'
+}
+
 // ─── Task row ─────────────────────────────────────────────────────────────────
 function TaskRow({ task }: { task: TaskStatus }) {
   const tone: Record<string, { bar: string; text: string; label: string }> = {
@@ -107,7 +119,9 @@ export default function SinglePage() {
   }, [theme])
 
   useEffect(() => {
-    const normalized = Math.min(140, Math.max(80, Number(fontScale) || 100))
+    const maxByWindow = Math.floor(Math.min(window.innerWidth / 1200, window.innerHeight / 860) * 100)
+    const maxScale = Math.min(120, Math.max(90, maxByWindow))
+    const normalized = Math.min(maxScale, Math.max(80, Number(fontScale) || 100))
     document.documentElement.style.setProperty('--ui-scale', String(normalized / 100))
     localStorage.setItem('vm-font-scale', String(normalized))
   }, [fontScale])
@@ -117,6 +131,14 @@ export default function SinglePage() {
   const setParam = (key: string, raw: string) => setConfig({ [key]: raw } as any)
   const splitPathList = (raw: string) =>
     raw.split(';').map(p => p.trim()).filter(Boolean)
+  const ensureRunConfig = () => {
+    if (!config.hook_dir || !config.bgm_dir) {
+      addToast('请填写 Hook 和 BGM', 'warning')
+      return null
+    }
+    const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
+    return { ...config, body_dirs: bodyDirs }
+  }
 
   const browse = async (key: string, multi = false) => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
@@ -133,13 +155,11 @@ export default function SinglePage() {
   }
 
   const startRender = async () => {
-    if (!config.hook_dir || !config.bgm_dir || !config.base_out_dir) {
-      addToast('请填写 Hook、BGM 和输出目录', 'warning'); return
-    }
+    const runConfig = ensureRunConfig()
+    if (!runConfig) return
     setIsRunning(true)
     try {
-      const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
-      const res = await api.createTask({ ...config, body_dirs: bodyDirs })
+      const res = await api.createTask(runConfig)
       addToast('任务已启动', 'success')
       appendLog(`▸ ${new Date().toLocaleTimeString()} 任务 ${res.task_id} 已派发`)
     } catch (e: any) {
@@ -149,13 +169,23 @@ export default function SinglePage() {
   }
 
   const preFlight = async () => {
-    try { await api.createTask({ ...config, target_count: 1 }); addToast('预检已提交', 'info') }
+    const runConfig = ensureRunConfig()
+    if (!runConfig) return
+    try {
+      const res = await api.preflight(runConfig)
+      clearLogs()
+      ;(res.report || []).forEach((item: any) => appendLog(`${item.ok ? '✅' : '❌'} [${item.name}] ${item.message}`))
+      appendLog(`>>> 预检完成。总可用首段产能预估: ${res.capacity}`)
+      addToast('预检完成', res.ok ? 'success' : 'error')
+    }
     catch (e: any) { addToast(e.message, 'error') }
   }
 
   const benchmark = async () => {
+    const runConfig = ensureRunConfig()
+    if (!runConfig) return
     try {
-      const res = await api.benchmark(config)
+      const res = await api.benchmark(runConfig)
       if (res.error) { addToast(res.error, 'error'); return }
       setConfig({ concurrent_tasks: res.best_concurrent })
       addToast(`最优并发 ${res.best_concurrent} 路`, 'success')
@@ -195,7 +225,11 @@ export default function SinglePage() {
               <input
                 value={fontScale}
                 onChange={(e) => setFontScale(e.target.value)}
-                onBlur={() => setFontScale(String(Math.min(140, Math.max(80, Number(fontScale) || 100))))}
+                onBlur={() => {
+                  const maxByWindow = Math.floor(Math.min(window.innerWidth / 1200, window.innerHeight / 860) * 100)
+                  const maxScale = Math.min(120, Math.max(90, maxByWindow))
+                  setFontScale(String(Math.min(maxScale, Math.max(80, Number(fontScale) || 100))))
+                }}
                 className="h-7 w-14 rounded-[4px] border border-white/[0.10] bg-black/20 px-2 text-right font-mono text-[11px] text-foreground outline-none focus:border-accent/60"
               />
               %
@@ -245,7 +279,7 @@ export default function SinglePage() {
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
                   onBrowse={() => browseFile('watermark_path')} onClear={() => setConfig({ watermark_path: '' })} />
-                <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir} required
+                <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir}
                   onChange={(v) => setConfig({ base_out_dir: v })}
                   onBrowse={() => browse('base_out_dir')}    onClear={() => setConfig({ base_out_dir: '' })} />
               </div>
@@ -277,7 +311,12 @@ export default function SinglePage() {
             {/* Output */}
             <Group title="输出">
               <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex-1 min-w-0">
+                    <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
+                  </div>
+                  <span className="w-12 shrink-0 font-mono text-[11px] text-accent">{getResolutionTag(config.resolution)}</span>
+                </div>
                 <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
                 <div className="flex items-center gap-4 pl-2">

@@ -114,6 +114,11 @@ def benchmark(config: VideoConfig):
     return task_service.get_benchmark(config)
 
 
+@router.post("/preflight")
+def preflight(config: VideoConfig):
+    return task_service.preflight(config)
+
+
 @router.post("/history/clear")
 def clear_history():
     task_service.clear_history()

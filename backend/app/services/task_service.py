@@ -30,10 +30,26 @@ class TaskService:
                 self.tasks[task_id].log_lines.append(message)
         return callback
 
+    def _normalize_config(self, config: dict) -> dict:
+        normalized = config.copy()
+        body_dirs = normalized.get('body_dirs') or []
+        if isinstance(body_dirs, str):
+            body_dirs = [p.strip() for p in body_dirs.split(';') if p.strip()]
+        normalized['body_dirs'] = body_dirs
+
+        if not normalized.get('base_out_dir', '').strip():
+            h_dir = normalized.get('hook_dir', '').rstrip('/\\')
+            parent = os.path.dirname(h_dir) or h_dir
+            name = os.path.basename(h_dir) or "VideoMatrix"
+            normalized['base_out_dir'] = os.path.join(parent, f"{name}_VideoMatrix_Output")
+
+        return normalized
+
     def _get_tasks_from_config(self, config: dict) -> List[dict]:
         tasks = []
         h_dir = config['hook_dir'].strip()
-        b_dir = config['body_dir'].strip()
+        body_dirs = config.get('body_dirs') or [h_dir]
+        b_dir = ';'.join(body_dirs)
         out_base = config['base_out_dir'].strip()
         sub_folders = [f for f in os.listdir(h_dir) if os.path.isdir(os.path.join(h_dir, f))]
         if sub_folders:
@@ -46,7 +62,7 @@ class TaskService:
                     if os.path.isdir(potential_b_sub):
                         task_b = [potential_b_sub]
                     else:
-                        task_b = [p.strip() for p in b_dir.split(';') if p.strip()]
+                        task_b = body_dirs
                 tasks.append({
                     'name': sub,
                     'hook_dir': task_h,
@@ -58,14 +74,14 @@ class TaskService:
             tasks.append({
                 'name': task_name,
                 'hook_dir': h_dir,
-                'body_dirs': [p.strip() for p in b_dir.split(';') if p.strip()],
+                'body_dirs': body_dirs,
                 'out': os.path.join(out_base, task_name)
             })
         return tasks
 
     def create_task(self, config: VideoConfig) -> str:
         task_id = str(uuid.uuid4())
-        raw_config = config.model_dump()
+        raw_config = self._normalize_config(config.model_dump())
         task_cfg = raw_config.copy()
 
         status = TaskStatus(
@@ -209,8 +225,33 @@ class TaskService:
     def clear_history(self):
         self.shared_cache.clear_history()
 
+    def preflight(self, config: VideoConfig) -> dict:
+        raw_config = self._normalize_config(config.model_dump())
+        tasks = self._get_tasks_from_config(raw_config)
+        if not tasks:
+            return {"ok": False, "error": "找不到任何素材目录", "report": []}
+
+        report = []
+        total_capacity = 0
+        for t in tasks:
+            task_cfg = raw_config.copy()
+            task_cfg['task_name'] = t['name']
+            task_cfg['hook_dir'] = t['hook_dir']
+            task_cfg['body_dirs'] = t['body_dirs']
+            core = VideoMatrixCore(task_cfg, lambda _x: None, self.shared_cache)
+            ok, msg = core.pre_flight_check()
+            if ok:
+                capacity = core.n_total if isinstance(core.n_total, int) else "无限"
+                total_capacity += core.n_total if isinstance(core.n_total, int) else 9999
+                report.append({"name": t['name'], "ok": True, "capacity": capacity, "message": f"可产出: {capacity} 个"})
+            else:
+                report.append({"name": t['name'], "ok": False, "capacity": 0, "message": msg})
+
+        cap_text = '充足/无限' if total_capacity > 9000 else total_capacity
+        return {"ok": any(item["ok"] for item in report), "capacity": cap_text, "report": report}
+
     def get_benchmark(self, config: VideoConfig) -> dict:
-        raw_config = config.model_dump()
+        raw_config = self._normalize_config(config.model_dump())
         tasks = self._get_tasks_from_config(raw_config)
         if not tasks:
             return {"error": "素材不足以支撑压测"}

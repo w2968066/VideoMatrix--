@@ -79,10 +79,13 @@ function stopBackend() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 860,
-    minWidth: 960,
-    minHeight: 720,
+    width: 1280,
+    height: 900,
+    minWidth: 1280,
+    minHeight: 900,
+    maxWidth: 1280,
+    maxHeight: 900,
+    resizable: false,
     title: 'VideoMatrix',
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
