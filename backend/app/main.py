@@ -9,8 +9,6 @@ from .api.routes import router
 # 确保工作目录正确，以便找到 ffmpeg
 if getattr(sys, 'frozen', False):
     os.chdir(os.path.dirname(sys.executable))
-else:
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 app = FastAPI(
     title="VideoMatrix API",

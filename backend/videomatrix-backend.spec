@@ -59,7 +59,7 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ['app/main.py'],
+    ['run_backend.py'],
     pathex=[str(BACKEND_DIR)],
     binaries=binaries,
     datas=[],
