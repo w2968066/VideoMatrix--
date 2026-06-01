@@ -2,30 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { api, TaskStatus } from '../api/client'
 import { Checkbox } from './ui/checkbox'
-import { BarPrimary, BarSecondary } from './ActionDock'
 import { AssetCard } from './AssetCard'
-
-// ─── icons ────────────────────────────────────────────────────────────────────
-const PlayIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-    <path d="M8 5v14l11-7z" />
-  </svg>
-)
-const RadarIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="9" />
-    <circle cx="12" cy="12" r="5" />
-    <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-    <path d="M12 12l5-5" />
-  </svg>
-)
-const GaugeIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 14l4-4" />
-    <path d="M3.5 16a9 9 0 1117 0" />
-    <circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none" />
-  </svg>
-)
 
 // ─── Group ────────────────────────────────────────────────────────────────────
 function Group({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
@@ -203,6 +180,22 @@ export default function SinglePage() {
     }
   }
 
+  const stopRunning = async () => {
+    const activeTasks = tasks.filter((t) => t.status === 'running' || t.status === 'pending')
+    if (activeTasks.length === 0) {
+      addToast('当前没有运行中的任务', 'info')
+      return
+    }
+    try {
+      await Promise.all(activeTasks.map((t) => api.stopTask(t.task_id)))
+      appendLog(`▸ ${new Date().toLocaleTimeString()} 已发送停止指令`)
+      addToast('停止指令已发送', 'success')
+    } catch (e: any) {
+      addToast(e.message, 'error')
+      appendLog(`[错误] ${e.message}`)
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
 
   return (
@@ -285,27 +278,47 @@ export default function SinglePage() {
               </div>
             </Group>
 
-            {/* Parameters · overlap · volume — text-entry controls */}
-            <div className="grid grid-cols-2 gap-x-7 gap-y-5 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-              <Group title="参数">
-                <div className="space-y-1.5">
-                  <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
-                  <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
-                  <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
-                  <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
-                  <ParamRow label="并发" value={config.concurrent_tasks ?? 3} onChange={(v) => setParam('concurrent_tasks', v)} />
-                </div>
-              </Group>
+            {/* Parameters · overlap · volume · original action rail */}
+            <div className="grid grid-cols-[minmax(0,1fr)_112px] gap-5 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+              <div className="grid grid-cols-2 gap-x-7 gap-y-5 min-w-0">
+                <Group title="参数">
+                  <div className="space-y-1.5">
+                    <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
+                    <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
+                    <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
+                    <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
+                    <ParamRow label="并发" value={config.concurrent_tasks ?? 3} onChange={(v) => setParam('concurrent_tasks', v)} />
+                  </div>
+                </Group>
 
-              <Group title="重叠率 / 音量">
-                <div className="space-y-1.5">
-                  <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
-                  <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
-                  <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
-                  <ParamRow label="原声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
-                  <ParamRow label="BGM" value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
-                </div>
-              </Group>
+                <Group title="重叠率 / 音量">
+                  <div className="space-y-1.5">
+                    <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
+                    <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
+                    <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
+                    <ParamRow label="原声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
+                    <ParamRow label="BGM" value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
+                  </div>
+                </Group>
+              </div>
+
+              <div className="flex flex-col items-stretch justify-center gap-2 border-l border-white/[0.06] pl-5">
+                <button type="button" onClick={preFlight} className="h-9 rounded-[2px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover">
+                  预检产能
+                </button>
+                <button type="button" onClick={startRender} disabled={isRunning} className="h-9 rounded-[2px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
+                  {isRunning ? '启动中…' : '启动渲染'}
+                </button>
+                <button type="button" onClick={clearHistory} className="h-9 rounded-[2px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover">
+                  清除记录
+                </button>
+                <button type="button" onClick={stopRunning} disabled={running === 0} className="h-9 rounded-[2px] bg-hot px-3 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
+                  停止
+                </button>
+                <button type="button" onClick={benchmark} className="mt-1 h-7 rounded-[2px] border border-white/[0.12] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent">
+                  智能压测
+                </button>
+              </div>
             </div>
 
             {/* Output */}
@@ -332,20 +345,6 @@ export default function SinglePage() {
               </div>
             </Group>
 
-            {/* Action row — pushed to bottom of the left column so it aligns
-                with the right telemetry panel */}
-            <div className="mt-auto pt-2 flex items-center gap-2.5">
-              <BarPrimary label="启动渲染" loading={isRunning} onClick={startRender}>
-                <PlayIcon />
-              </BarPrimary>
-              <BarSecondary label="预检产能" onClick={preFlight}>
-                <RadarIcon />
-              </BarSecondary>
-              <BarSecondary label="智能压测" onClick={benchmark}>
-                <GaugeIcon />
-              </BarSecondary>
-              <BarSecondary label="清理历史记录" onClick={clearHistory} />
-            </div>
           </div>
 
           {/* ─── RIGHT: telemetry panel ─── */}
