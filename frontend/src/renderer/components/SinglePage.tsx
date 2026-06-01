@@ -83,7 +83,6 @@ export default function SinglePage() {
   const [isRunning, setIsRunning] = useState(false)
   const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output'>('log')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
-  const [fontScale, setFontScale] = useState(() => localStorage.getItem('vm-font-scale') || '100')
   const [benchmarkRunning, setBenchmarkRunning] = useState(false)
   const [benchmarkProgress, setBenchmarkProgress] = useState(0)
   const [completionNotice, setCompletionNotice] = useState<string | null>(null)
@@ -98,12 +97,6 @@ export default function SinglePage() {
     document.documentElement.classList.toggle('theme-light', theme === 'light')
     localStorage.setItem('vm-theme', theme)
   }, [theme])
-
-  useEffect(() => {
-    const normalized = Math.min(125, Math.max(80, Number(fontScale) || 100))
-    document.documentElement.style.setProperty('--ui-scale', String(normalized / 100))
-    localStorage.setItem('vm-font-scale', String(normalized))
-  }, [fontScale])
 
   useEffect(() => {
     tasks.forEach((task) => {
@@ -268,18 +261,6 @@ export default function SinglePage() {
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              字体
-              <input
-                value={fontScale}
-                onChange={(e) => setFontScale(e.target.value)}
-                onBlur={() => {
-                  setFontScale(String(Math.min(125, Math.max(80, Number(fontScale) || 100))))
-                }}
-                className="h-7 w-14 rounded-[4px] border border-white/[0.10] bg-black/20 px-2 text-right font-mono text-[11px] text-foreground outline-none focus:border-accent/60"
-              />
-              %
-            </label>
             <button
               type="button"
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
