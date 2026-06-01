@@ -28,22 +28,22 @@ export interface VideoConfig {
   srt_dir?: string
   watermark_path?: string
   base_out_dir: string
-  t_hook: number
-  t_body: number
-  total_clips: number
-  target_count: number
-  hook_r: number
-  body_r: number
-  bgm_r: number
+  t_hook: string | number
+  t_body: string | number
+  total_clips: string | number
+  target_count: string | number
+  hook_r: string | number
+  body_r: string | number
+  bgm_r: string | number
   resolution: string
-  fps: number
+  fps: string | number
   bitrate: string
-  vol_orig: number
-  vol_bgm: number
-  vol_voice: number
+  vol_orig: string | number
+  vol_bgm: string | number
+  vol_voice: string | number
   enable_srt: boolean
   enable_gpu: boolean
-  concurrent_tasks?: number
+  concurrent_tasks?: string | number
 }
 
 export interface TaskStatus {

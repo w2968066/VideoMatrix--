@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { api, TaskStatus } from '../api/client'
-import { Slider } from './ui/slider'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Checkbox } from './ui/checkbox'
 import { BarPrimary, BarSecondary } from './ActionDock'
 import { AssetCard } from './AssetCard'
@@ -39,48 +37,25 @@ function Group({ title, children, className = '' }: { title: string; children: R
   )
 }
 
-// ─── Slider row (compact) ─────────────────────────────────────────────────────
-function SliderRow({ label, value, min, max, step, suffix, onChange }: {
+// ─── Text parameter row (compact) ─────────────────────────────────────────────
+function ParamRow({ label, value, suffix, onChange, placeholder }: {
   label: string
-  value: number
-  min: number
-  max: number
-  step: number
+  value: string | number
   suffix?: string
-  onChange: (v: number) => void
-}) {
-  return (
-    <div className="flex items-center gap-3 h-8">
-      <label className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</label>
-      <div className="flex-1">
-        <Slider value={[value]} min={min} max={max} step={step} onValueChange={([v]) => onChange(v)} />
-      </div>
-      <span className="font-mono text-[11px] text-foreground tabular-nums w-12 text-right">
-        {Number.isInteger(value) ? value : value.toFixed(2)}
-        {suffix && <span className="text-muted-foreground ml-0.5">{suffix}</span>}
-      </span>
-    </div>
-  )
-}
-
-// ─── Select row (compact) ─────────────────────────────────────────────────────
-function SelectRow({ label, value, onChange, options }: {
-  label: string
-  value: string
+  placeholder?: string
   onChange: (v: string) => void
-  options: { value: string; label: string }[]
 }) {
   return (
-    <div className="flex items-center gap-2 min-w-0">
-      <label className="w-9 shrink-0 text-[11px] text-muted-foreground">{label}</label>
-      <div className="flex-1 min-w-0">
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
+    <div className="flex items-center gap-2 h-8">
+      <label className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</label>
+      <input
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode="decimal"
+        className="h-8 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+      />
+      {suffix && <span className="w-7 shrink-0 text-[10px] text-muted-foreground">{suffix}</span>}
     </div>
   )
 }
@@ -126,6 +101,9 @@ export default function SinglePage() {
 
   const running = tasks.filter(t => t.status === 'running').length
   const allOutputFiles = tasks.flatMap(t => t.output_files)
+  const setParam = (key: string, raw: string) => setConfig({ [key]: raw } as any)
+  const splitPathList = (raw: string) =>
+    raw.split(';').map(p => p.trim()).filter(Boolean)
 
   const browse = async (key: string, multi = false) => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
@@ -171,6 +149,17 @@ export default function SinglePage() {
     } catch (e: any) { addToast(e.message, 'error') }
   }
 
+  const clearHistory = async () => {
+    try {
+      await api.clearHistory()
+      addToast('历史记录已清理', 'success')
+      appendLog(`▸ ${new Date().toLocaleTimeString()} 历史记录已清理`)
+    } catch (e: any) {
+      addToast(e.message, 'error')
+      appendLog(`[错误] ${e.message}`)
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
 
   return (
@@ -203,45 +192,52 @@ export default function SinglePage() {
           {/* ─── LEFT: configuration ─── */}
           <div className="flex flex-col gap-5 min-h-0 overflow-hidden">
 
-            {/* Sources — card grid */}
+            {/* Sources — long path inputs */}
             <Group title="素材">
-              <div className="grid grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-1 gap-2">
                 <AssetCard kind="hook"      label="Hook 首段" value={config.hook_dir}             count={scannedFiles.hook?.count} required
+                  onChange={(v) => setConfig({ hook_dir: v })}
                   onBrowse={() => browse('hook_dir')}        onClear={() => setConfig({ hook_dir: '' })} />
                 <AssetCard kind="body"      label="Body 后段" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count}
+                  onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
                   onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
                 <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required
+                  onChange={(v) => setConfig({ bgm_dir: v })}
                   onBrowse={() => browse('bgm_dir')}         onClear={() => setConfig({ bgm_dir: '' })} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
+                  onChange={(v) => setConfig({ voice_dir: v })}
                   onBrowse={() => browse('voice_dir')}       onClear={() => setConfig({ voice_dir: '' })} />
                 <AssetCard kind="srt"       label="字幕"      value={config.srt_dir || ''}
+                  onChange={(v) => setConfig({ srt_dir: v })}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '' })} />
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
+                  onChange={(v) => setConfig({ watermark_path: v })}
                   onBrowse={() => browseFile('watermark_path')} onClear={() => setConfig({ watermark_path: '' })} />
                 <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir} required
+                  onChange={(v) => setConfig({ base_out_dir: v })}
                   onBrowse={() => browse('base_out_dir')}    onClear={() => setConfig({ base_out_dir: '' })} />
               </div>
             </Group>
 
-            {/* Parameters · overlap · volume — two-column slider grid inside a soft panel */}
+            {/* Parameters · overlap · volume — text-entry controls */}
             <div className="grid grid-cols-2 gap-x-7 gap-y-5 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
               <Group title="参数">
                 <div className="space-y-1.5">
-                  <SliderRow label="首段"  value={config.t_hook}    suffix="s" min={0.5} max={10}  step={0.5} onChange={(v) => setConfig({ t_hook: v })} />
-                  <SliderRow label="后段"  value={config.t_body}    suffix="s" min={0.5} max={10}  step={0.5} onChange={(v) => setConfig({ t_body: v })} />
-                  <SliderRow label="片段"  value={config.total_clips}            min={2}   max={20}  step={1}   onChange={(v) => setConfig({ total_clips: Math.floor(v) })} />
-                  <SliderRow label="数量"  value={config.target_count}           min={1}   max={100} step={1}   onChange={(v) => setConfig({ target_count: Math.floor(v) })} />
-                  <SliderRow label="并发"  value={config.concurrent_tasks || 3}  min={1}   max={8}   step={1}   onChange={(v) => setConfig({ concurrent_tasks: Math.floor(v) })} />
+                  <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
+                  <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
+                  <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
+                  <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
+                  <ParamRow label="并发" value={config.concurrent_tasks ?? 3} onChange={(v) => setParam('concurrent_tasks', v)} />
                 </div>
               </Group>
 
               <Group title="重叠率 / 音量">
                 <div className="space-y-1.5">
-                  <SliderRow label="Hook"  value={config.hook_r}   min={0} max={0.99} step={0.05} onChange={(v) => setConfig({ hook_r: v })} />
-                  <SliderRow label="Body"  value={config.body_r}   min={0} max={0.99} step={0.05} onChange={(v) => setConfig({ body_r: v })} />
-                  <SliderRow label="BGM-R" value={config.bgm_r}    min={0} max={0.99} step={0.05} onChange={(v) => setConfig({ bgm_r: v })} />
-                  <SliderRow label="原声"  value={config.vol_orig}  suffix="%" min={0} max={200} step={5} onChange={(v) => setConfig({ vol_orig: Math.floor(v) })} />
-                  <SliderRow label="BGM"   value={config.vol_bgm}   suffix="%" min={0} max={200} step={5} onChange={(v) => setConfig({ vol_bgm: Math.floor(v) })} />
+                  <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
+                  <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
+                  <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
+                  <ParamRow label="原声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
+                  <ParamRow label="BGM" value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
                 </div>
               </Group>
             </div>
@@ -249,26 +245,9 @@ export default function SinglePage() {
             {/* Output */}
             <Group title="输出">
               <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                <SelectRow label="分辨率" value={config.resolution} onChange={(v) => setConfig({ resolution: v })}
-                  options={[
-                    { value: '720*1280',  label: '720 × 1280' },
-                    { value: '1080*1920', label: '1080 × 1920' },
-                    { value: '1920*1080', label: '1920 × 1080' },
-                    { value: '2160*3840', label: '2160 × 3840' },
-                  ]} />
-                <SelectRow label="码率" value={config.bitrate} onChange={(v) => setConfig({ bitrate: v })}
-                  options={[
-                    { value: '3000k',  label: '3 Mbps' },
-                    { value: '5000k',  label: '5 Mbps' },
-                    { value: '8000k',  label: '8 Mbps' },
-                    { value: '12000k', label: '12 Mbps' },
-                  ]} />
-                <SelectRow label="帧率" value={String(config.fps)} onChange={(v) => setConfig({ fps: parseInt(v) })}
-                  options={[
-                    { value: '24', label: '24 fps' },
-                    { value: '30', label: '30 fps' },
-                    { value: '60', label: '60 fps' },
-                  ]} />
+                <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
+                <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
+                <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
                 <div className="flex items-center gap-4 pl-2">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox checked={config.enable_srt} onCheckedChange={(v) => setConfig({ enable_srt: v as boolean })} />
@@ -294,6 +273,7 @@ export default function SinglePage() {
               <BarSecondary label="智能压测" onClick={benchmark}>
                 <GaugeIcon />
               </BarSecondary>
+              <BarSecondary label="清理历史记录" onClick={clearHistory} />
             </div>
           </div>
 

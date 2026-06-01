@@ -63,86 +63,66 @@ interface AssetCardProps {
   count?: number
   required?: boolean
   onBrowse: () => void
+  onChange: (value: string) => void
   onClear?: () => void
   pickAction?: string
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onClear, pickAction = '浏览' }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onClear, pickAction = '浏览' }: AssetCardProps) {
   const filled = !!value
-  const tail = filled ? value.split('/').filter(Boolean).slice(-2).join('/') : '未选择'
 
   return (
     <div
       className={cn(
-        'group relative overflow-hidden rounded-lg transition-all duration-200',
-        // base elevation
+        'group relative overflow-hidden rounded-md transition-colors',
         filled
-          ? 'border border-accent/35 bg-gradient-to-b from-[rgba(232,166,88,0.05)] to-[rgba(232,166,88,0.01)] shadow-[0_2px_10px_-4px_rgba(232,166,88,0.25),inset_0_1px_0_rgba(255,255,255,0.04)]'
-          : 'border border-white/[0.08] bg-gradient-to-b from-white/[0.025] to-white/[0.005]',
-        'hover:border-accent/55 hover:shadow-[0_6px_22px_-6px_rgba(232,166,88,0.45),inset_0_1px_0_rgba(255,255,255,0.06)]',
-        'hover:-translate-y-px'
+          ? 'border border-accent/35 bg-[rgba(232,166,88,0.035)]'
+          : 'border border-white/[0.08] bg-white/[0.015]',
+        'hover:border-accent/50'
       )}
     >
-      {/* Preview area — clickable to browse */}
-      <button
-        type="button"
-        onClick={onBrowse}
-        className="w-full text-left px-3 pt-3 pb-2.5"
-      >
-        <div className="flex items-start gap-2.5">
-          <div
-            className={cn(
-              'w-9 h-9 rounded-md flex items-center justify-center transition-colors shrink-0',
-              filled
-                ? 'bg-accent/15 text-accent ring-1 ring-inset ring-accent/30'
-                : 'bg-white/[0.04] text-muted-foreground'
-            )}
-          >
-            <span className="w-[18px] h-[18px] block">{AssetIcons[kind]}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[12px] font-medium text-foreground/90 leading-none">{label}</span>
-              {required && !filled && (
-                <span className="text-[9px] uppercase tracking-wider text-hot/80">必填</span>
-              )}
-            </div>
-            <div className="mt-1.5 flex items-center gap-2">
-              {filled && count !== undefined && (
-                <span className="font-mono text-[10px] tabular-nums text-accent/90">
-                  {count} 个文件
-                </span>
-              )}
-              {!filled && (
-                <span className="text-[10px] text-muted-foreground/70">{pickAction}导入</span>
-              )}
-            </div>
-          </div>
-        </div>
-      </button>
-
-      {/* Path footer */}
-      <div className="border-t border-white/[0.05] bg-black/15 px-3 py-1.5 flex items-center gap-2">
-        <svg width="9" height="9" viewBox="0 0 12 12" fill="none" className="text-muted-foreground/60 shrink-0">
-          <path d="M2 3.5l3-2 5 2v6L5 11.5l-3-2v-6z" stroke="currentColor" strokeWidth="1" />
-        </svg>
-        <span
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        <div
           className={cn(
-            'flex-1 font-mono text-[10px] truncate',
-            filled ? 'text-muted-foreground' : 'text-muted/45'
+            'w-7 h-7 rounded-[4px] flex items-center justify-center shrink-0',
+            filled
+              ? 'bg-accent/14 text-accent ring-1 ring-inset ring-accent/25'
+              : 'bg-white/[0.035] text-muted-foreground'
           )}
-          title={value}
         >
-          {tail}
-        </span>
+          <span className="w-[15px] h-[15px] block">{AssetIcons[kind]}</span>
+        </div>
+        <label className="w-[76px] shrink-0 text-[11px] text-foreground/85">
+          {label}
+          {required && !filled && <span className="ml-1 text-hot/85">必填</span>}
+        </label>
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          title={value}
+          placeholder={`${pickAction}或粘贴路径`}
+          className="h-8 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+        />
+        {filled && count !== undefined && (
+          <span className="w-16 shrink-0 text-right font-mono text-[10px] tabular-nums text-accent/90">
+            {count} 文件
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onBrowse}
+          className="h-8 shrink-0 rounded-[4px] border border-white/[0.08] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
+        >
+          {pickAction}
+        </button>
         {filled && onClear && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClear() }}
-            className="w-3.5 h-3.5 flex items-center justify-center text-muted-foreground hover:text-hot transition-colors text-[12px] leading-none opacity-0 group-hover:opacity-100"
+            className="h-8 shrink-0 rounded-[4px] border border-white/[0.08] px-2.5 text-[11px] text-muted-foreground hover:border-hot/40 hover:text-hot"
             aria-label="清除"
           >
-            ×
+            清除
           </button>
         )}
       </div>

@@ -51,7 +51,7 @@ const defaultConfig: VideoConfig = {
   body_r: 0.5,
   bgm_r: 0.3,
   resolution: '1080*1920',
-  fps: 30,
+  fps: '30',
   bitrate: '5000k',
   vol_orig: 80,
   vol_bgm: 30,

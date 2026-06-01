@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Union
 from datetime import datetime
 
 
@@ -23,7 +23,7 @@ class VideoConfig(BaseModel):
     bgm_r: float = Field(default=0.3, ge=0.0, le=0.99, description="BGM重叠率")
     
     resolution: str = Field(default="1080*1920", description="输出分辨率")
-    fps: int = Field(default=30, ge=1, le=120, description="输出帧率")
+    fps: Union[str, float, int] = Field(default="30", description="输出帧率")
     bitrate: str = Field(default="5000k", description="视频码率")
     
     vol_orig: int = Field(default=80, ge=0, le=200, description="原声音量(%)")
