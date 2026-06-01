@@ -20,8 +20,8 @@ export default {
         ok: '#9BD66B',
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Manrope', '"PingFang SC"', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"Microsoft YaHei UI"', '"PingFang SC"', 'sans-serif'],
+        mono: ['"Cascadia Code"', '"SFMono-Regular"', 'ui-monospace', 'monospace'],
       },
     },
   },

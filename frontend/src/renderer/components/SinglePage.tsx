@@ -180,9 +180,14 @@ export default function SinglePage() {
 
       <div className="flex-1 min-h-0 px-10 pb-4 flex flex-col">
         {/* Header */}
-        <div className="flex items-baseline justify-between pb-3 mb-3 border-b border-white/[0.06] shrink-0">
-          <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
-          <span className="text-[11px] font-mono text-muted-foreground">
+        <div className="flex items-center justify-between gap-4 pb-3 mb-3 border-b border-white/[0.06] shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
+            <span className="shrink-0 rounded-[4px] border border-accent/45 bg-accent px-3 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
+              VX：18667026883
+            </span>
+          </div>
+          <span className="shrink-0 text-[11px] font-mono text-muted-foreground">
             {running > 0 ? (
               <span className="text-accent inline-flex items-center gap-1.5">
                 <span className="w-1 h-1 rounded-full bg-accent animate-pulse-dot" />
