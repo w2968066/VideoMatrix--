@@ -82,23 +82,23 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
         'hover:border-accent/50'
       )}
     >
-      <div className="flex items-center gap-2 px-2 py-1.5">
+      <div className="flex items-center gap-1.5 px-2 py-1">
         <button
           type="button"
           onClick={onOpen}
           disabled={!filled || !onOpen}
           title={filled ? '打开路径' : undefined}
           className={cn(
-            'w-7 h-7 rounded-[4px] flex items-center justify-center shrink-0 transition-colors',
+            'w-6 h-6 rounded-[4px] flex items-center justify-center shrink-0 transition-colors',
             filled
               ? 'bg-accent/14 text-accent ring-1 ring-inset ring-accent/25 hover:bg-accent/25'
               : 'bg-white/[0.035] text-muted-foreground',
             (!filled || !onOpen) && 'cursor-default'
           )}
         >
-          <span className="w-[15px] h-[15px] block">{AssetIcons[kind]}</span>
+          <span className="w-[14px] h-[14px] block">{AssetIcons[kind]}</span>
         </button>
-        <label className="w-[76px] shrink-0 text-[11px] text-foreground/85">
+        <label className="w-[72px] shrink-0 text-[11px] text-foreground/85">
           {label}
           {required && !filled && <span className="ml-1 text-hot/85">必填</span>}
         </label>
@@ -107,7 +107,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
           onChange={(e) => onChange(e.target.value)}
           title={value}
           placeholder={`${pickAction}或粘贴路径`}
-          className="h-8 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+          className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
         />
         {filled && count !== undefined && (
           <span className="w-16 shrink-0 text-right font-mono text-[10px] tabular-nums text-accent/90">
@@ -117,7 +117,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
         <button
           type="button"
           onClick={onBrowse}
-          className="h-8 shrink-0 rounded-[4px] border border-white/[0.08] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
+          className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
         >
           {pickAction}
         </button>
@@ -125,7 +125,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClear() }}
-            className="h-8 shrink-0 rounded-[4px] border border-white/[0.08] px-2.5 text-[11px] text-muted-foreground hover:border-hot/40 hover:text-hot"
+            className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] px-2.5 text-[11px] text-muted-foreground hover:border-hot/40 hover:text-hot"
             aria-label="清除"
           >
             清除

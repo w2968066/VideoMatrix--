@@ -8,7 +8,7 @@ import { AssetCard } from './AssetCard'
 function Group({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
   return (
     <div className={className}>
-      <h2 className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground mb-3">{title}</h2>
+      <h2 className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-2">{title}</h2>
       {children}
     </div>
   )
@@ -23,14 +23,14 @@ function ParamRow({ label, value, suffix, onChange, placeholder }: {
   onChange: (v: string) => void
 }) {
   return (
-    <div className="flex items-center gap-2 h-8">
+    <div className="flex items-center gap-2 h-7">
       <label className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</label>
       <input
         value={String(value ?? '')}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode="decimal"
-        className="h-8 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.08] bg-black/20 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
       />
       {suffix && <span className="w-7 shrink-0 text-[10px] text-muted-foreground">{suffix}</span>}
     </div>
@@ -251,9 +251,9 @@ export default function SinglePage() {
       {/* macOS hidden-titlebar drag region */}
       <div className="h-7 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
-      <div className="flex-1 min-h-0 px-6 pb-4 flex flex-col">
+      <div className="flex-1 min-h-0 px-5 pb-3 flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4 pb-3 mb-3 border-b border-white/[0.06] shrink-0">
+        <div className="flex items-center justify-between gap-4 pb-2 mb-2 border-b border-white/[0.06] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
             <span className="shrink-0 rounded-[4px] border border-accent/45 bg-accent px-3 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
@@ -280,14 +280,14 @@ export default function SinglePage() {
         </div>
 
         {/* TWO COLUMNS: left controls / right telemetry */}
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(520px,1fr)_minmax(360px,420px)] gap-5">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(560px,1fr)_minmax(340px,400px)] gap-4">
 
           {/* ─── LEFT: configuration ─── */}
-          <div className="flex flex-col gap-4 min-h-0 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="flex flex-col gap-3 min-h-0 overflow-hidden">
 
             {/* Sources — long path inputs */}
             <Group title="素材">
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-1.5">
                 <AssetCard kind="hook"      label="Hook 首段" value={config.hook_dir}             count={scannedFiles.hook?.count} required
                   onChange={(v) => setConfig({ hook_dir: v })}
                   onOpen={() => openConfiguredPath(config.hook_dir)}
@@ -321,9 +321,9 @@ export default function SinglePage() {
 
             {/* Parameters · overlap · volume · original action rail */}
             <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-3 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-4 min-w-0">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3 min-w-0">
                 <Group title="参数">
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
                     <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
                     <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
@@ -333,7 +333,7 @@ export default function SinglePage() {
                 </Group>
 
                 <Group title="重叠率 / 音量">
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
                     <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
                     <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
