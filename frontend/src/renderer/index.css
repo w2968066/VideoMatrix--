@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    --ui-scale: 1.25;
+    --ui-scale: 1.15;
     --color-background: 10 10 15;
     --color-background-elev: 19 19 26;
     --color-foreground: 237 237 242;

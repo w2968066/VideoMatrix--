@@ -251,7 +251,7 @@ export default function SinglePage() {
       {/* macOS hidden-titlebar drag region */}
       <div className="h-7 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
-      <div className="flex-1 min-h-0 px-10 pb-4 flex flex-col">
+      <div className="flex-1 min-h-0 px-6 pb-4 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between gap-4 pb-3 mb-3 border-b border-white/[0.06] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -280,10 +280,10 @@ export default function SinglePage() {
         </div>
 
         {/* TWO COLUMNS: left controls / right telemetry */}
-        <div className="flex-1 min-h-0 grid grid-cols-[1fr_420px] gap-7">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(520px,1fr)_minmax(360px,420px)] gap-5">
 
           {/* ─── LEFT: configuration ─── */}
-          <div className="flex flex-col gap-5 min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-4 min-h-0 overflow-y-auto overflow-x-hidden pr-1">
 
             {/* Sources — long path inputs */}
             <Group title="素材">
@@ -320,8 +320,8 @@ export default function SinglePage() {
             </Group>
 
             {/* Parameters · overlap · volume · original action rail */}
-            <div className="grid grid-cols-[minmax(0,1fr)_112px] gap-5 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-              <div className="grid grid-cols-2 gap-x-7 gap-y-5 min-w-0">
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-3 rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-4 min-w-0">
                 <Group title="参数">
                   <div className="space-y-1.5">
                     <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
@@ -343,7 +343,7 @@ export default function SinglePage() {
                 </Group>
               </div>
 
-              <div className="flex flex-col items-stretch justify-center gap-2 border-l border-white/[0.06] pl-5">
+              <div className="flex flex-col items-stretch justify-center gap-2 border-l border-white/[0.06] pl-3">
                 <button type="button" onClick={preFlight} className="h-9 rounded-[2px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover">
                   预检产能
                 </button>
@@ -364,7 +364,7 @@ export default function SinglePage() {
 
             {/* Output */}
             <Group title="输出">
-              <div className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+              <div className="grid grid-cols-2 gap-3 items-center rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.018] to-white/[0.004] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
