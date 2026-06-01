@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
 import os from 'os'
@@ -78,6 +78,8 @@ function stopBackend() {
 }
 
 function createWindow() {
+  Menu.setApplicationMenu(null)
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -88,6 +90,7 @@ function createWindow() {
     resizable: false,
     maximizable: false,
     fullscreenable: false,
+    autoHideMenuBar: true,
     title: 'VideoMatrix',
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
