@@ -107,7 +107,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
           onChange={(e) => onChange(e.target.value)}
           title={value}
           placeholder={`${pickAction}或粘贴路径`}
-          className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.07] bg-black/18 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+          className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70"
         />
         {filled && count !== undefined && (
           <span className="w-12 shrink-0 text-right font-mono text-[10px] tabular-nums text-accent/90">

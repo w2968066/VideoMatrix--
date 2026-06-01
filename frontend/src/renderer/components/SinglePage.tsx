@@ -8,7 +8,7 @@ import { AssetCard } from './AssetCard'
 function Group({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
   return (
     <div className={className}>
-      <h2 className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1.5">{title}</h2>
+      <h2 className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">{title}</h2>
       {children}
     </div>
   )
@@ -30,7 +30,7 @@ function ParamRow({ label, value, suffix, onChange, placeholder }: {
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode="decimal"
-        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.07] bg-black/18 px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/45 focus:border-accent/60"
+        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70"
       />
       {suffix && <span className="w-7 shrink-0 text-[10px] text-muted-foreground">{suffix}</span>}
     </div>
@@ -249,11 +249,11 @@ export default function SinglePage() {
   return (
     <div className="ui-shell flex flex-col overflow-hidden">
       {/* macOS hidden-titlebar drag region */}
-      <div className="h-6 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+      <div className="h-3 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
-      <div className="flex-1 min-h-0 px-5 pb-3 flex flex-col">
+      <div className="flex-1 min-h-0 px-5 pb-2 flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4 pb-2 mb-2 border-b border-white/[0.055] shrink-0">
+        <div className="flex items-center justify-between gap-4 pb-1.5 mb-1.5 border-b border-white/[0.055] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
             <span className="shrink-0 rounded-[4px] border border-accent/45 bg-accent px-3 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
@@ -280,10 +280,10 @@ export default function SinglePage() {
         </div>
 
         {/* TWO COLUMNS: left controls / right telemetry */}
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(640px,1fr)_360px] gap-3">
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(660px,1fr)_340px] gap-3">
 
           {/* ─── LEFT: configuration ─── */}
-          <div className="flex flex-col gap-2.5 min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-2 min-h-0 overflow-hidden">
 
             {/* Sources — long path inputs */}
             <Group title="素材">
@@ -320,8 +320,8 @@ export default function SinglePage() {
             </Group>
 
             {/* Parameters · overlap · volume · original action rail */}
-            <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-3 rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 min-w-0">
+            <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2.5 rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 min-w-0">
                 <Group title="参数">
                   <div className="space-y-1">
                     <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
@@ -343,17 +343,17 @@ export default function SinglePage() {
                 </Group>
               </div>
 
-              <div className="flex flex-col items-stretch justify-center gap-1.5 border-l border-white/[0.055] pl-3">
-                <button type="button" onClick={preFlight} className="h-8 rounded-[4px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover">
+              <div className="flex flex-col items-stretch justify-center gap-1 border-l border-white/[0.055] pl-2.5">
+                <button type="button" onClick={preFlight} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover">
                   预检产能
                 </button>
-                <button type="button" onClick={startRender} disabled={isRunning} className="h-8 rounded-[4px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
+                <button type="button" onClick={startRender} disabled={isRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
                   {isRunning ? '启动中…' : '启动渲染'}
                 </button>
-                <button type="button" onClick={clearHistory} className="h-8 rounded-[4px] bg-accent px-3 text-[12px] font-semibold text-background hover:bg-accent-hover">
+                <button type="button" onClick={clearHistory} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover">
                   清除记录
                 </button>
-                <button type="button" onClick={stopRunning} disabled={running === 0} className="h-8 rounded-[4px] bg-hot px-3 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
+                <button type="button" onClick={stopRunning} disabled={running === 0} className="h-8 rounded-[4px] bg-hot px-2 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
                   停止
                 </button>
                 <button type="button" onClick={benchmark} disabled={benchmarkRunning} className="mt-0.5 h-6 rounded-[4px] border border-white/[0.10] bg-white/[0.01] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
@@ -364,7 +364,7 @@ export default function SinglePage() {
 
             {/* Output */}
             <Group title="输出">
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 items-center rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
