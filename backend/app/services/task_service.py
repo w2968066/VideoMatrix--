@@ -192,13 +192,12 @@ class TaskService:
     def _render_job(self, core: VideoMatrixCore, idx: int, status: TaskStatus) -> bool:
         if status.status == "stopped" or not core.is_running:
             return False
-        result = core.render_single_video(idx)
-        if result and status.task_id in self.tasks:
-            if core.last_output_path:
-                if core.last_output_path not in self.tasks[status.task_id].output_files:
-                    self.tasks[status.task_id].output_files.append(core.last_output_path)
-                if core.last_elapsed is not None:
-                    self.tasks[status.task_id].output_elapsed[core.last_output_path] = core.last_elapsed
+        result, output_path, elapsed = core.render_single_video(idx, return_result=True)
+        if result and output_path and status.task_id in self.tasks:
+            if output_path not in self.tasks[status.task_id].output_files:
+                self.tasks[status.task_id].output_files.append(output_path)
+            if elapsed is not None:
+                self.tasks[status.task_id].output_elapsed[output_path] = elapsed
         return result
 
     def stop_task(self, task_id: str) -> bool:

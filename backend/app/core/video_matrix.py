@@ -260,9 +260,9 @@ class VideoMatrixCore:
         random.shuffle(self.hook_pool)
         return True, "预检通过"
 
-    def render_single_video(self, task_idx: int) -> bool:
+    def render_single_video(self, task_idx: int, return_result: bool = False):
         if not self.is_running:
-            return False
+            return (False, None, None) if return_result else False
 
         now_str_start = datetime.now().strftime("%H:%M:%S")
         self.log(f"  [{now_str_start}] [{self.task_name}] 正在拼装 视频 {task_idx:03d} ...")
@@ -273,7 +273,7 @@ class VideoMatrixCore:
 
         with self.core_lock:
             if not self.hook_pool:
-                return False
+                return (False, None, None) if return_result else False
             if cfg['hook_r'] >= 0.99:
                 hook_clip = random.choice(self.hook_pool)
             else:
@@ -342,6 +342,7 @@ class VideoMatrixCore:
         # 修正 build_filter_complex 中的 watermark_idx 逻辑
         # 由于 build_filter_complex 内部硬编码了索引，这里我们需要重建正确的 filter_complex
         # 暂时直接使用原逻辑重写 filter_complex 以确保正确性
+        n_clips = len(clips)
         n_clips = len(clips)
         res_str = cfg['resolution'].lower().replace('*', 'x')
         w, h = map(int, res_str.split('x'))
@@ -421,7 +422,7 @@ class VideoMatrixCore:
             if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 输出异常（文件过小或不存在），可能编码失败")
-                return False
+                return (False, None, None) if return_result else False
             if 'id' in hook_clip:
                 with self.shared.lock:
                     self.shared.usage_history.add(hook_clip['id'])
@@ -431,8 +432,8 @@ class VideoMatrixCore:
             self.last_elapsed = round(elapsed_time, 1)
             now_str = datetime.now().strftime("%H:%M:%S")
             self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 完成，耗时 {elapsed_time:.1f} 秒 -> {out_name}")
-            return True
-        return False
+            return (True, out_path, self.last_elapsed) if return_result else True
+        return (False, None, None) if return_result else False
 
     def stop(self):
         self.is_running = False
