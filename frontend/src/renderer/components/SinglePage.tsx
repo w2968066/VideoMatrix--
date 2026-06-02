@@ -4,6 +4,11 @@ import { api, TaskStatus } from '../api/client'
 import { Checkbox } from './ui/checkbox'
 import { AssetCard } from './AssetCard'
 
+const RESOLUTION_PRESETS = [
+  { label: '1080P', value: '1080*1920' },
+  { label: '2K', value: '1440*2560' },
+]
+
 // ─── Group ────────────────────────────────────────────────────────────────────
 function Group({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
   return (
@@ -370,6 +375,23 @@ export default function SinglePage() {
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
                   </div>
                   <span className="w-12 shrink-0 font-mono text-[11px] text-accent">{getResolutionTag(config.resolution)}</span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {RESOLUTION_PRESETS.map((preset) => (
+                      <button
+                        key={preset.value}
+                        type="button"
+                        onClick={() => setConfig({ resolution: preset.value })}
+                        className={`h-7 rounded-[4px] border px-2 text-[10px] font-semibold transition-colors ${
+                          config.resolution === preset.value
+                            ? 'border-accent bg-accent text-background'
+                            : 'border-white/[0.10] bg-white/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
+                        }`}
+                        title={`9:16 ${preset.value}`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
