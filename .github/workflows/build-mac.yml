@@ -72,10 +72,25 @@ jobs:
         run: npm run build
 
       # ── Package as .dmg (extraResources pulls backend exe in automatically)
+      - name: Generate macOS icon
+        working-directory: frontend
+        run: |
+          mkdir -p build/icon.iconset
+          sips -z 16 16     public/icon.png --out build/icon.iconset/icon_16x16.png
+          sips -z 32 32     public/icon.png --out build/icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     public/icon.png --out build/icon.iconset/icon_32x32.png
+          sips -z 64 64     public/icon.png --out build/icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   public/icon.png --out build/icon.iconset/icon_128x128.png
+          sips -z 256 256   public/icon.png --out build/icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   public/icon.png --out build/icon.iconset/icon_256x256.png
+          sips -z 512 512   public/icon.png --out build/icon.iconset/icon_256x256@2x.png
+          sips -z 512 512   public/icon.png --out build/icon.iconset/icon_512x512.png
+          sips -z 1024 1024 public/icon.png --out build/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns build/icon.iconset -o build/icon.icns
+
       - name: Package Electron app
         working-directory: frontend
         env:
-          GH_TOKEN: ${{ github.token }}
           # skip code signing in CI — release will be ad-hoc signed
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac --publish never
