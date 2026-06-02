@@ -99,4 +99,6 @@ jobs:
               --notes "Self-contained macOS dmg (Electron + FastAPI + ffmpeg, no Python required)."
           fi
           dmg=$(ls frontend/release/*.dmg | head -1)
-          gh release upload "$tag" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber
+          upload_path="$(dirname "$dmg")/VideoMatrix.Setup.2.0.0-mac.dmg"
+          cp "$dmg" "$upload_path"
+          gh release upload "$tag" "$upload_path" --repo "$GITHUB_REPOSITORY" --clobber
