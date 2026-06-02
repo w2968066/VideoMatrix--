@@ -10,6 +10,18 @@ let backendProcess: ChildProcess | null = null
 const isDev = process.env.NODE_ENV === 'development'
 const BACKEND_PORT = 8765
 
+function logDev(message: string) {
+  if (isDev) {
+    console.log(message)
+  }
+}
+
+function errorDev(message: string) {
+  if (isDev) {
+    console.error(message)
+  }
+}
+
 function getDevBackendDir(): string {
   return path.join(__dirname, '../../../backend')
 }
@@ -31,13 +43,13 @@ function startBackend() {
 
   if (bundled) {
     // Production path — single self-contained binary, no Python required.
-    console.log(`[Main] Launching bundled backend: ${bundled} --port ${BACKEND_PORT}`)
+    logDev(`[Main] Launching bundled backend: ${bundled} --port ${BACKEND_PORT}`)
     backendProcess = spawn(
       bundled,
       ['--port', String(BACKEND_PORT), '--host', '127.0.0.1'],
       {
         cwd: path.dirname(bundled),
-        stdio: 'pipe',
+        stdio: 'ignore',
         env: { ...process.env },
       }
     )
@@ -45,7 +57,7 @@ function startBackend() {
     // Dev path — assume system Python + project venv installed deps.
     const backendDir = getDevBackendDir()
     const python = os.platform() === 'win32' ? 'python' : 'python3'
-    console.log(`[Main] Launching dev backend: ${python} -m uvicorn app.main:app --port ${BACKEND_PORT}`)
+    logDev(`[Main] Launching dev backend: ${python} -m uvicorn app.main:app --port ${BACKEND_PORT}`)
     backendProcess = spawn(
       python,
       ['-m', 'uvicorn', 'app.main:app', '--port', String(BACKEND_PORT), '--host', '127.0.0.1'],
@@ -58,15 +70,19 @@ function startBackend() {
   }
 
   backendProcess.stdout?.on('data', (data) => {
-    console.log(`[Backend] ${data.toString().trim()}`)
+    logDev(`[Backend] ${data.toString().trim()}`)
   })
 
   backendProcess.stderr?.on('data', (data) => {
-    console.error(`[Backend] ${data.toString().trim()}`)
+    errorDev(`[Backend] ${data.toString().trim()}`)
+  })
+
+  backendProcess.on('error', (error) => {
+    errorDev(`[Backend] failed to start: ${error.message}`)
   })
 
   backendProcess.on('close', (code) => {
-    console.log(`[Backend] exited with code ${code}`)
+    logDev(`[Backend] exited with code ${code}`)
   })
 }
 
