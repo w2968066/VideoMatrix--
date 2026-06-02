@@ -100,4 +100,6 @@ jobs:
               --notes "Self-contained Windows installer (Electron + FastAPI + ffmpeg, no Python required)."
           }
           $installer = Get-ChildItem -Path frontend/release -Filter "*.exe" | Select-Object -First 1
-          gh release upload $tag $installer.FullName --repo $env:GITHUB_REPOSITORY --clobber
+          $uploadPath = Join-Path $installer.DirectoryName "VideoMatrix.Setup.2.0.0.exe"
+          Copy-Item -LiteralPath $installer.FullName -Destination $uploadPath -Force
+          gh release upload $tag $uploadPath --repo $env:GITHUB_REPOSITORY --clobber
