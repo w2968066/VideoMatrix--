@@ -6,6 +6,7 @@ import fs from 'fs'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
+let isQuitting = false
 
 const isDev = process.env.NODE_ENV === 'development'
 const BACKEND_PORT = 8765
@@ -93,6 +94,30 @@ function stopBackend() {
   }
 }
 
+async function stopBackendTasks(timeoutMs = 2500) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/tasks/stop-all`, {
+      method: 'POST',
+      signal: controller.signal,
+    })
+  } catch {
+    // Backend may already be down; closing should still proceed.
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function shutdownApp() {
+  if (isQuitting) return
+  isQuitting = true
+  await stopBackendTasks()
+  stopBackend()
+  mainWindow?.destroy()
+  app.quit()
+}
+
 function createWindow() {
   Menu.setApplicationMenu(null)
 
@@ -127,6 +152,13 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault()
+      void shutdownApp()
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -166,7 +198,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  stopBackend()
+  if (!isQuitting) {
+    void shutdownApp()
+  }
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -179,5 +213,6 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
   stopBackend()
 })

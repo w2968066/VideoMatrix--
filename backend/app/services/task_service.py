@@ -210,6 +210,17 @@ class TaskService:
                 core.stop()
         return True
 
+    def stop_all_tasks(self) -> int:
+        stopped = 0
+        active_ids = [
+            task_id for task_id, task in self.tasks.items()
+            if task.status in ("pending", "running")
+        ]
+        for task_id in active_ids:
+            if self.stop_task(task_id):
+                stopped += 1
+        return stopped
+
     def get_task(self, task_id: str) -> Optional[TaskStatus]:
         return self.tasks.get(task_id)
 

@@ -41,6 +41,12 @@ def stop_task(task_id: str):
     return {"message": "停止指令已发送"}
 
 
+@router.post("/tasks/stop-all")
+def stop_all_tasks():
+    stopped = task_service.stop_all_tasks()
+    return {"message": "停止指令已发送", "stopped": stopped}
+
+
 @router.get("/tasks/{task_id}/logs")
 def get_logs(task_id: str):
     task = task_service.get_task(task_id)

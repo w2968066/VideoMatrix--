@@ -343,7 +343,6 @@ class VideoMatrixCore:
         # 由于 build_filter_complex 内部硬编码了索引，这里我们需要重建正确的 filter_complex
         # 暂时直接使用原逻辑重写 filter_complex 以确保正确性
         n_clips = len(clips)
-        n_clips = len(clips)
         res_str = cfg['resolution'].lower().replace('*', 'x')
         w, h = map(int, res_str.split('x'))
         
