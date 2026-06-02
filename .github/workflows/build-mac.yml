@@ -1,0 +1,102 @@
+name: Build VideoMatrix Installer (macOS)
+
+# Self-contained macOS .dmg for the Electron + FastAPI + ffmpeg architecture.
+# Same recipe as the Windows workflow, only the platform-specific binaries
+# differ. Users mount the dmg and drag-drop into Applications — no Python
+# or Homebrew needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to upload the dmg to"
+        required: true
+        default: "v2.0.0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Python toolchain ─────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend deps + PyInstaller
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      # ── Bundle ffmpeg (static mac arm64 + x64 build from evermeet) ────────
+      - name: Download FFmpeg static build
+        run: |
+          mkdir -p backend/ffmpeg
+          curl -L https://evermeet.cx/ffmpeg/getrelease/zip  -o ffmpeg.zip
+          curl -L https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip -o ffprobe.zip
+          unzip -o ffmpeg.zip  -d backend/ffmpeg
+          unzip -o ffprobe.zip -d backend/ffmpeg
+          chmod +x backend/ffmpeg/ffmpeg backend/ffmpeg/ffprobe
+
+      # ── Backend → single self-contained binary ───────────────────────────
+      - name: Build backend binary
+        working-directory: backend
+        run: pyinstaller --clean videomatrix-backend.spec
+
+      # ── Node toolchain ───────────────────────────────────────────────────
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build renderer / main / preload
+        working-directory: frontend
+        run: npm run build
+
+      # ── Package as .dmg (extraResources pulls backend exe in automatically)
+      - name: Package Electron app
+        working-directory: frontend
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # skip code signing in CI — release will be ad-hoc signed
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac --publish never
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoMatrix-mac-dmg
+          path: frontend/release/*.dmg
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.release_tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "VideoMatrix ${tag#v}" \
+              --notes "Self-contained macOS dmg (Electron + FastAPI + ffmpeg, no Python required)."
+          fi
+          dmg=$(ls frontend/release/*.dmg | head -1)
+          gh release upload "$tag" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber

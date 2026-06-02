@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --ui-scale: 1.15;
+    --color-background: 7 8 12;
+    --color-background-elev: 14 15 20;
+    --color-foreground: 237 237 242;
+    --color-muted: 74 76 88;
+    --color-muted-foreground: 145 148 162;
+    --color-border: 255 255 255;
+    --color-border-hover: 255 255 255;
+    --color-accent: 225 154 64;
+    --color-accent-hover: 239 176 91;
+    --color-hot: 221 82 68;
+    --color-ok: 126 190 92;
+  }
+
+  :root.theme-light {
+    --color-background: 244 245 247;
+    --color-background-elev: 255 255 255;
+    --color-foreground: 25 28 34;
+    --color-muted: 126 132 143;
+    --color-muted-foreground: 85 91 104;
+    --color-border: 20 24 32;
+    --color-border-hover: 20 24 32;
+    --color-accent: 181 110 32;
+    --color-accent-hover: 151 88 24;
+    --color-hot: 204 55 45;
+    --color-ok: 76 145 48;
+  }
+
+  html, body, #root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+    background: rgb(var(--color-background));
+    color: rgb(var(--color-foreground));
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* layered backdrop — gives the page subtle depth without distracting */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(70% 50% at 18% 0%, rgba(225, 154, 64, 0.035) 0%, transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,0.018) 0%, transparent 38%);
+  }
+  :root.theme-light body::before {
+    background:
+      radial-gradient(70% 50% at 25% 0%, rgba(181, 110, 32, 0.08) 0%, transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,0.62) 0%, transparent 45%);
+  }
+  #root { position: relative; z-index: 1; }
+
+  .ui-shell {
+    width: 100%;
+    height: 100%;
+    zoom: var(--ui-scale);
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+  ::selection { background: rgba(232,166,88,0.32); color: #fff; }
+}
+
+@layer components {
+  /* Corner-bracket "viewfinder" frame for inputs / selects */
+  .bracket {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    pointer-events: none;
+    z-index: 5;
+    border: 0 solid rgba(255, 255, 255, 0.32);
+    transition: border-color 0.2s ease;
+  }
+  .bracket-tl { top: 0;    left: 0;    border-top-width: 1px; border-left-width: 1px; }
+  .bracket-tr { top: 0;    right: 0;   border-top-width: 1px; border-right-width: 1px; }
+  .bracket-bl { bottom: 0; left: 0;    border-bottom-width: 1px; border-left-width: 1px; }
+  .bracket-br { bottom: 0; right: 0;   border-bottom-width: 1px; border-right-width: 1px; }
+
+  /* Hover + focus highlight */
+  .group:hover > .bracket,
+  .group:focus-within > .bracket {
+    border-color: rgba(232, 166, 88, 0.85);
+  }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
+
+.animate-spin-slow { animation: spin 1s linear infinite; }
+.animate-pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
