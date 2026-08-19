@@ -67,9 +67,11 @@ interface AssetCardProps {
   onOpen?: () => void
   onClear?: () => void
   pickAction?: string
+  secondaryAction?: string
+  onSecondaryAction?: () => void
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览' }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -121,6 +123,15 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
         >
           {pickAction}
         </button>
+        {secondaryAction && onSecondaryAction && (
+          <button
+            type="button"
+            onClick={onSecondaryAction}
+            className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
+          >
+            {secondaryAction}
+          </button>
+        )}
         {filled && onClear && (
           <button
             type="button"

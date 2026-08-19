@@ -7,7 +7,7 @@ class VideoConfig(BaseModel):
     task_name: str = Field(default="Task", description="任务名称")
     hook_dir: str = Field(..., description="首段素材目录")
     body_dirs: List[str] = Field(default_factory=list, description="后段素材目录列表")
-    bgm_dir: str = Field(..., description="BGM 目录")
+    bgm_dir: str = Field(..., description="BGM 目录或带音轨的视频文件")
     voice_dir: Optional[str] = Field(default=None, description="配音目录")
     srt_dir: Optional[str] = Field(default=None, description="字幕目录")
     watermark_path: Optional[str] = Field(default=None, description="水印图片/GIF路径")

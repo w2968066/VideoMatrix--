@@ -133,6 +133,7 @@ export default function SinglePage() {
       window.electronAPI?.openPath(target)
     })
   }
+  const isFilePath = (value: string) => /\.(mp3|wav|m4a|aac|flac|ogg|opus|mp4|mov|mkv|avi|webm)$/i.test(value.trim())
   const ensureRunConfig = () => {
     if (!config.hook_dir || !config.bgm_dir) {
       addToast('请填写 Hook 和 BGM', 'warning')
@@ -154,6 +155,18 @@ export default function SinglePage() {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
     const path = await window.electronAPI.openFile([{ name: 'Images', extensions: ['png', 'gif', 'jpg'] }])
     if (path) setConfig({ [key]: path } as any)
+  }
+
+  const browseBgmVideo = async () => {
+    if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
+    const path = await window.electronAPI.openFile([{
+      name: '带声音的视频',
+      extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm'],
+    }])
+    if (path) {
+      setConfig({ bgm_dir: path })
+      addToast('已选择视频音轨作为 BGM', 'success')
+    }
   }
 
   const startRender = async () => {
@@ -301,10 +314,11 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
                   onOpen={() => openConfiguredPath(config.body_dirs.join('; '))}
                   onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
-                <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required
+                <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required pickAction="目录"
                   onChange={(v) => setConfig({ bgm_dir: v })}
-                  onOpen={() => openConfiguredPath(config.bgm_dir)}
-                  onBrowse={() => browse('bgm_dir')}         onClear={() => setConfig({ bgm_dir: '' })} />
+                  onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
+                  onBrowse={() => browse('bgm_dir')}         secondaryAction="视频" onSecondaryAction={browseBgmVideo}
+                  onClear={() => setConfig({ bgm_dir: '' })} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
                   onChange={(v) => setConfig({ voice_dir: v })}
                   onOpen={() => openConfiguredPath(config.voice_dir || '')}

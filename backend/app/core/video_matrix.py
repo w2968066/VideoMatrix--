@@ -93,6 +93,8 @@ class VideoMatrixCore:
     def _scan_files(self, dir_path: str, exts: tuple) -> List[str]:
         if not dir_path or not os.path.exists(dir_path):
             return []
+        if os.path.isfile(dir_path):
+            return [dir_path] if dir_path.lower().endswith(exts) else []
         res = []
         for root, _, files in os.walk(dir_path):
             for f in files:
@@ -187,7 +189,10 @@ class VideoMatrixCore:
         body_files = []
         for bd in cfg['body_dirs']:
             body_files.extend(self._scan_files(bd, ('.mp4', '.mov')))
-        bgm_files = self._scan_files(cfg['bgm_dir'], ('.mp3', '.wav'))
+        bgm_files = self._scan_files(
+            cfg['bgm_dir'],
+            ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm')
+        )
 
         probe_results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
@@ -242,15 +247,15 @@ class VideoMatrixCore:
             return False, f"库 [{self.task_name}] 后段素材不足拼凑 1 个视频。"
 
         for f in bgm_files:
-            dur, _ = probe_results[f]
-            if dur >= t_total:
+            dur, has_audio = probe_results[f]
+            if has_audio and dur >= t_total:
                 step = max(t_total * (1 - cfg['bgm_r']), 0.1)
                 n = int(math.floor((dur - t_total) / step)) + 1
                 for i in range(n):
                     self.bgm_pool.append({'file': f, 'start': i * step, 'duration': t_total})
 
         if not self.bgm_pool:
-            return False, "BGM 库素材时长不足。"
+            return False, "BGM 素材不足，视频文件需包含音轨且时长足够。"
 
         if cfg.get('voice_dir') and os.path.exists(cfg['voice_dir']):
             voice_files = self._scan_files(cfg['voice_dir'], ('.mp3', '.wav'))
