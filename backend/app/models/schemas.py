@@ -18,9 +18,9 @@ class VideoConfig(BaseModel):
     total_clips: int = Field(default=5, ge=2, description="每视频总片段数")
     target_count: int = Field(default=10, ge=1, description="目标生成数量")
     
-    hook_r: float = Field(default=0.5, ge=0.0, le=0.99, description="首段重叠率")
-    body_r: float = Field(default=0.5, ge=0.0, le=0.99, description="后段重叠率")
-    bgm_r: float = Field(default=0.3, ge=0.0, le=0.99, description="BGM重叠率")
+    hook_r: float = Field(default=0.5, ge=0.0, le=1.0, description="首段重叠率")
+    body_r: float = Field(default=0.5, ge=0.0, le=1.0, description="后段重叠率")
+    bgm_r: float = Field(default=0.3, ge=0.0, le=1.0, description="BGM重叠率")
     
     resolution: str = Field(default="1080*1920", description="输出分辨率")
     fps: Union[str, float, int] = Field(default="30", description="输出帧率")

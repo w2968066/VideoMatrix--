@@ -6,6 +6,28 @@ const getBaseUrl = async (): Promise<string> => {
   return 'http://127.0.0.1:8765/api'
 }
 
+function formatApiError(detail: unknown, fallback: string): string {
+  const fieldLabels: Record<string, string> = {
+    hook_r: 'Hook 重叠率', body_r: 'Body 重叠率', bgm_r: 'BGM 重叠率',
+    t_hook: '首段时长', t_body: '后段时长', total_clips: '片段数',
+    target_count: '生成数量', concurrent_tasks: '并发数',
+  }
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const error = item as { loc?: unknown[]; msg?: string }
+        const field = error.loc?.at(-1)
+        const label = field ? fieldLabels[String(field)] || String(field) : ''
+        return label && error.msg ? `${label}：${error.msg}` : error.msg
+      })
+      .filter((message): message is string => Boolean(message))
+    if (messages.length) return messages.join('；')
+  }
+  return fallback
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const baseUrl = await getBaseUrl()
   const res = await fetch(`${baseUrl}${path}`, {
@@ -14,7 +36,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(err.detail || `HTTP ${res.status}`)
+    throw new Error(formatApiError(err.detail, `请求失败（HTTP ${res.status}）`))
   }
   return res.json()
 }
