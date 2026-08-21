@@ -12,9 +12,12 @@ from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Callable
 
 from .ffmpeg import (
-    FFMPEG, probe_media, extract_media_info,
-    build_filter_complex, render_video
+    FFMPEG, MEDIA_END_SAFETY_MARGIN, probe_media, extract_media_info, extract_audio_duration,
+    render_video
 )
+
+MEDIA_CACHE_VERSION = 2
+DURATION_EPSILON = 0.001
 
 APP_STATE_DIR = os.path.join(
     os.environ.get('APPDATA') or os.path.expanduser('~'),
@@ -25,6 +28,16 @@ os.makedirs(APP_STATE_DIR, exist_ok=True)
 
 def state_path(filename: str) -> str:
     return os.path.join(APP_STATE_DIR, filename)
+
+
+def slice_count(usable_duration: float, clip_duration: float, step: float) -> int:
+    """Count safe slices while allowing one exact-length clip from the start."""
+    if clip_duration <= 0 or step <= 0:
+        return 0
+    if usable_duration >= clip_duration:
+        return int(math.floor((usable_duration - clip_duration) / step)) + 1
+    actual_duration = usable_duration + MEDIA_END_SAFETY_MARGIN
+    return 1 if actual_duration + DURATION_EPSILON >= clip_duration else 0
 
 
 class SharedMediaCache:
@@ -102,26 +115,36 @@ class VideoMatrixCore:
                     res.append(os.path.join(root, f))
         return res
 
-    def probe_media_cached(self, file_path: str) -> Tuple[str, float, bool]:
+    def probe_media_cached(self, file_path: str) -> Tuple[str, float, bool, float]:
+        mtime = None
         try:
             mtime = os.path.getmtime(file_path)
             with self.shared.lock:
                 cached = self.shared.media_cache.get(file_path)
-                if cached and cached.get('mtime') == mtime:
-                    return file_path, cached['dur'], cached['has_audio']
+                if (
+                    cached
+                    and cached.get('version') == MEDIA_CACHE_VERSION
+                    and cached.get('mtime') == mtime
+                    and 'audio_dur' in cached
+                ):
+                    return file_path, cached['dur'], cached['has_audio'], cached['audio_dur']
         except Exception:
             pass
 
         info = probe_media(file_path)
         if info:
             dur, has_audio, _, _, _ = extract_media_info(info, file_path)
-            dur = max(0.0, dur - 0.2)
+            audio_dur = extract_audio_duration(info)
             with self.shared.lock:
-                self.shared.media_cache[file_path] = {'mtime': mtime, 'dur': dur, 'has_audio': has_audio}
-            return file_path, dur, has_audio
+                self.shared.media_cache[file_path] = {
+                    'version': MEDIA_CACHE_VERSION,
+                    'mtime': mtime, 'dur': dur, 'has_audio': has_audio,
+                    'audio_dur': audio_dur,
+                }
+            return file_path, dur, has_audio, audio_dur
 
         self.log(f"[{self.task_name}] WARNING: 素材损坏或无法读取 -> {os.path.basename(file_path)}")
-        return file_path, 0.0, False
+        return file_path, 0.0, False, 0.0
 
     def parse_time_to_ms(self, t_str: str) -> int:
         h, m, s, ms = map(int, re.split('[:,]', t_str.replace('.', ',').strip()))
@@ -133,7 +156,7 @@ class VideoMatrixCore:
         s, ms = int(ms // 1000), int(ms % 1000)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    def process_srt(self, srt_dir: str, duration_sec: float) -> Optional[str]:
+    def process_srt(self, srt_dir: str, duration_sec: float, offset_sec: float = 0.0) -> Optional[str]:
         srt_files = self._scan_files(srt_dir, ('.srt',))
         if not srt_files:
             return None
@@ -149,6 +172,7 @@ class VideoMatrixCore:
                 return None
 
         slice_start_ms, slice_end_ms = 0, int(duration_sec * 1000)
+        offset_ms = int(offset_sec * 1000)
         new_subs, index = [], 1
         blocks = re.compile(
             r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\n|\Z)',
@@ -159,8 +183,8 @@ class VideoMatrixCore:
             t_start = self.parse_time_to_ms(t_start_str)
             t_end = self.parse_time_to_ms(t_end_str)
             if t_end > slice_start_ms and t_start < slice_end_ms:
-                new_start = max(0, t_start - slice_start_ms)
-                new_end = min(duration_sec * 1000, t_end - slice_start_ms)
+                new_start = max(0, t_start - slice_start_ms) + offset_ms
+                new_end = min(duration_sec * 1000, t_end - slice_start_ms) + offset_ms
                 new_subs.append(
                     f"{index}\n{self.format_ms_to_time(new_start)} --> {self.format_ms_to_time(new_end)}\n{text.strip()}"
                 )
@@ -183,7 +207,9 @@ class VideoMatrixCore:
         t_hook = cfg['t_hook']
         t_body = cfg['t_body']
         total_clips = cfg['total_clips']
-        t_total = t_hook + t_body * (total_clips - 1)
+        body_duration = t_body * (total_clips - 1)
+        t_total = t_hook + body_duration
+        bgm_duration = t_total if cfg.get('apply_bgm_to_hook', True) else body_duration
 
         hook_files = self._scan_files(cfg['hook_dir'], ('.mp4', '.mov'))
         body_files = []
@@ -193,45 +219,62 @@ class VideoMatrixCore:
             cfg['bgm_dir'],
             ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm')
         )
+        voice_files = self._scan_files(cfg.get('voice_dir', ''), ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'))
 
         probe_results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-            all_media = list(set(hook_files + body_files + bgm_files))
+            all_media = list(set(hook_files + body_files + bgm_files + voice_files))
             futures = {executor.submit(self.probe_media_cached, f): f for f in all_media}
             for future in concurrent.futures.as_completed(futures):
                 if not self.is_running:
                     return False, "已停止"
-                f_path, dur, has_audio = future.result()
-                probe_results[f_path] = (dur, has_audio)
+                f_path, dur, has_audio, audio_dur = future.result()
+                probe_results[f_path] = (dur, has_audio, audio_dur)
 
         self.shared.save_state()
 
+        hook_candidate_count = 0
         for f in hook_files:
-            dur, has_audio = probe_results[f]
-            if dur >= t_hook:
-                if cfg['hook_r'] >= 0.99:
-                    self.hook_pool.append({'file': f, 'start': 0.0, 'duration': t_hook, 'has_audio': has_audio})
-                else:
-                    step = max(t_hook * (1 - cfg['hook_r']), 0.1)
-                    n = int(math.floor((dur - t_hook) / step)) + 1
-                    for i in range(n):
-                        hook_id = f"{f}_{i*step:.2f}"
-                        if hook_id not in self.shared.usage_history:
-                            self.hook_pool.append({
-                                'file': f, 'start': i * step,
-                                'duration': t_hook, 'has_audio': has_audio, 'id': hook_id
-                            })
+            dur, has_audio, _ = probe_results[f]
+            step = max(t_hook * (1 - cfg['hook_r']), 0.1)
+            n = slice_count(dur, t_hook, step)
+            if n <= 0:
+                continue
+            hook_candidate_count += n
+            if cfg['hook_r'] >= 0.99:
+                self.hook_pool.append({'file': f, 'start': 0.0, 'duration': t_hook, 'has_audio': has_audio})
+                continue
+            for i in range(n):
+                hook_id = f"{f}_{i*step:.2f}"
+                if hook_id not in self.shared.usage_history:
+                    self.hook_pool.append({
+                        'file': f, 'start': i * step,
+                        'duration': t_hook, 'has_audio': has_audio, 'id': hook_id
+                    })
 
         for f in body_files:
-            dur, has_audio = probe_results[f]
-            if dur >= t_body:
-                step = max(t_body * (1 - cfg['body_r']), 0.1)
-                n = int(math.floor((dur - t_body) / step)) + 1
-                for i in range(n):
-                    self.body_pool.append({'file': f, 'start': i * step, 'duration': t_body, 'has_audio': has_audio})
+            dur, has_audio, _ = probe_results[f]
+            step = max(t_body * (1 - cfg['body_r']), 0.1)
+            n = slice_count(dur, t_body, step)
+            for i in range(n):
+                self.body_pool.append({'file': f, 'start': i * step, 'duration': t_body, 'has_audio': has_audio})
 
         if not self.hook_pool:
-            return False, f"库 [{self.task_name}] 首段素材耗尽或无合规视频。"
+            if not hook_files:
+                return False, f"库 [{self.task_name}] 未找到 MP4/MOV 首段视频。"
+            if hook_candidate_count == 0:
+                max_duration = max(
+                    (probe_results[f][0] + MEDIA_END_SAFETY_MARGIN for f in hook_files),
+                    default=0.0,
+                )
+                return False, (
+                    f"库 [{self.task_name}] 找到 {len(hook_files)} 个视频，但最长视频轨约 "
+                    f"{max_duration:.2f} 秒，短于首段设置 {t_hook:g} 秒。"
+                )
+            return False, (
+                f"库 [{self.task_name}] 找到 {len(hook_files)} 个合规视频，"
+                "但对应首段切片已全部使用；请清理记录后重试。"
+            )
 
         if cfg['hook_r'] >= 0.99:
             self.n_total = "无限"
@@ -247,20 +290,31 @@ class VideoMatrixCore:
             return False, f"库 [{self.task_name}] 后段素材不足拼凑 1 个视频。"
 
         for f in bgm_files:
-            dur, has_audio = probe_results[f]
-            if has_audio and dur >= t_total:
-                step = max(t_total * (1 - cfg['bgm_r']), 0.1)
-                n = int(math.floor((dur - t_total) / step)) + 1
+            _, has_audio, audio_dur = probe_results[f]
+            if has_audio:
+                step = max(bgm_duration * (1 - cfg['bgm_r']), 0.1)
+                n = slice_count(audio_dur, bgm_duration, step)
                 for i in range(n):
-                    self.bgm_pool.append({'file': f, 'start': i * step, 'duration': t_total})
+                    self.bgm_pool.append({'file': f, 'start': i * step, 'duration': bgm_duration})
 
         if not self.bgm_pool:
             return False, "BGM 素材不足，视频文件需包含音轨且时长足够。"
 
-        if cfg.get('voice_dir') and os.path.exists(cfg['voice_dir']):
-            voice_files = self._scan_files(cfg['voice_dir'], ('.mp3', '.wav'))
-            for f in voice_files:
-                self.voice_pool.append({'file': f})
+        for f in voice_files:
+            _, has_audio, audio_dur = probe_results[f]
+            if has_audio and audio_dur > 0:
+                self.voice_pool.append({'file': f, 'duration': audio_dur})
+
+        protected = [
+            name for name, enabled in (
+                ('BGM', cfg.get('apply_bgm_to_hook', True)),
+                ('配音', cfg.get('apply_voice_to_hook', True)),
+                ('字幕', cfg.get('apply_srt_to_hook', True)),
+                ('水印', cfg.get('apply_watermark_to_hook', True)),
+            ) if not enabled
+        ]
+        if protected:
+            self.log(f"[{self.task_name}] 成品 Hook 保护：{', '.join(protected)} 从 {t_hook:g} 秒后开始生效。")
 
         random.shuffle(self.hook_pool)
         return True, "预检通过"
@@ -274,7 +328,9 @@ class VideoMatrixCore:
 
         start_time = time.time()
         cfg = self.config
-        t_total = cfg['t_hook'] + cfg['t_body'] * (cfg['total_clips'] - 1)
+        t_hook = cfg['t_hook']
+        body_duration = cfg['t_body'] * (cfg['total_clips'] - 1)
+        t_total = t_hook + body_duration
 
         with self.core_lock:
             if not self.hook_pool:
@@ -294,15 +350,23 @@ class VideoMatrixCore:
 
         temp_srt_path_safe = None
         if cfg.get('enable_srt') and cfg.get('srt_dir') and os.path.exists(cfg['srt_dir']):
-            temp_srt_path_safe = self.process_srt(cfg['srt_dir'], t_total)
+            srt_on_hook = cfg.get('apply_srt_to_hook', True)
+            temp_srt_path_safe = self.process_srt(
+                cfg['srt_dir'],
+                t_total if srt_on_hook else body_duration,
+                0.0 if srt_on_hook else t_hook,
+            )
 
         vol_orig = cfg['vol_orig'] / 100.0
+        hook_volume_value = cfg.get('vol_hook_orig')
+        vol_hook_orig = (cfg['vol_orig'] if hook_volume_value is None else hook_volume_value) / 100.0
         vol_bgm = cfg['vol_bgm'] / 100.0
         vol_voice = cfg['vol_voice'] / 100.0
         fps_val = str(cfg['fps'])
 
         has_voice = bool(voice_clip and vol_voice > 0)
         has_watermark = bool(cfg.get('watermark_path') and os.path.exists(cfg['watermark_path']))
+        has_original_audio = vol_hook_orig > 0 or vol_orig > 0
 
         clips = [hook_clip] + list(body_clips)
         inputs = [c['file'] for c in clips] + [bgm_clip['file']]
@@ -330,23 +394,6 @@ class VideoMatrixCore:
             else:
                 cmd.extend(['-i', inp])
 
-        filter_complex, current_v, audio_map = build_filter_complex(
-            clips=clips,
-            bgm_clip=bgm_clip,
-            voice_clip=voice_clip,
-            watermark_path=cfg.get('watermark_path'),
-            srt_path_safe=temp_srt_path_safe,
-            resolution=cfg['resolution'],
-            fps=cfg['fps'],
-            vol_orig=vol_orig,
-            vol_bgm=vol_bgm,
-            vol_voice=vol_voice,
-            total_duration=t_total,
-        )
-
-        # 修正 build_filter_complex 中的 watermark_idx 逻辑
-        # 由于 build_filter_complex 内部硬编码了索引，这里我们需要重建正确的 filter_complex
-        # 暂时直接使用原逻辑重写 filter_complex 以确保正确性
         n_clips = len(clips)
         res_str = cfg['resolution'].lower().replace('*', 'x')
         w, h = map(int, res_str.split('x'))
@@ -359,18 +406,23 @@ class VideoMatrixCore:
                 f"fps={fps_val},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 f"setsar=1,format=yuv420p[v{i}]; "
             )
-            if vol_orig > 0:
+            if has_original_audio:
+                clip_volume = vol_hook_orig if i == 0 else vol_orig
                 if clip_has_audio:
                     filter_complex += (
                         f"[{i}:a]atrim=start={start}:duration={dur},asetpts=PTS-STARTPTS,"
-                        f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]; "
+                        f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                        f"apad=pad_dur={dur},atrim=duration={dur},volume={clip_volume}[a{i}]; "
                     )
                 else:
-                    filter_complex += f"anullsrc=channel_layout=stereo:sample_rate=44100:d={dur}[a{i}]; "
+                    filter_complex += (
+                        f"anullsrc=channel_layout=stereo:sample_rate=44100:d={dur},"
+                        f"volume={clip_volume}[a{i}]; "
+                    )
 
-        if vol_orig > 0:
+        if has_original_audio:
             concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(n_clips)])
-            filter_complex += f"{concat_inputs}concat=n={n_clips}:v=1:a=1[vout_base][aout_orig]; [aout_orig]volume={vol_orig}[aout_orig_v]; "
+            filter_complex += f"{concat_inputs}concat=n={n_clips}:v=1:a=1[vout_base][aout_orig]; "
         else:
             concat_inputs = "".join([f"[v{i}]" for i in range(n_clips)])
             filter_complex += f"{concat_inputs}concat=n={n_clips}:v=1:a=0[vout_base]; "
@@ -380,20 +432,47 @@ class VideoMatrixCore:
             filter_complex += f"{current_v}subtitles='{temp_srt_path_safe}'[v_sub]; "
             current_v = "[v_sub]"
         if has_watermark:
-            wm_idx = n_clips + (1 if has_voice else 0) + 1
-            filter_complex += f"{current_v}[{wm_idx}:v]overlay=(W-w)/2:(H-h)/2:shortest=1[v_wm]; "
+            watermark_offset = 0.0 if cfg.get('apply_watermark_to_hook', True) else t_hook
+            watermark_input = f"[{watermark_idx}:v]"
+            enable_filter = ""
+            if watermark_offset > 0:
+                filter_complex += (
+                    f"[{watermark_idx}:v]setpts=PTS-STARTPTS+{watermark_offset}/TB[wm_timed]; "
+                )
+                watermark_input = "[wm_timed]"
+                enable_filter = f":enable='gte(t,{watermark_offset})'"
+            filter_complex += (
+                f"{current_v}{watermark_input}overlay=(W-w)/2:(H-h)/2:"
+                f"shortest=1:eof_action=pass{enable_filter}[v_wm]; "
+            )
             current_v = "[v_wm]"
 
         bgm_idx = n_clips
         if vol_bgm > 0:
-            filter_complex += f"[{bgm_idx}:a]atrim=start={bgm_clip['start']}:duration={t_total},asetpts=PTS-STARTPTS,volume={vol_bgm}[aout_bgm_v]; "
+            bgm_offset = 0.0 if cfg.get('apply_bgm_to_hook', True) else t_hook
+            bgm_delay = f",adelay={int(round(bgm_offset * 1000))}|{int(round(bgm_offset * 1000))}" if bgm_offset > 0 else ""
+            filter_complex += (
+                f"[{bgm_idx}:a]atrim=start={bgm_clip['start']}:duration={bgm_clip['duration']},"
+                f"asetpts=PTS-STARTPTS,aresample=44100,"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo,volume={vol_bgm}"
+                f"{bgm_delay}[aout_bgm_v]; "
+            )
         if has_voice:
-            voice_idx_actual = n_clips + 1
-            filter_complex += f"[{voice_idx_actual}:a]atrim=start=0:duration={t_total},asetpts=PTS-STARTPTS,volume={vol_voice}[aout_voice_v]; "
+            voice_on_hook = cfg.get('apply_voice_to_hook', True)
+            voice_offset = 0.0 if voice_on_hook else t_hook
+            voice_duration = t_total if voice_on_hook else body_duration
+            voice_delay_ms = int(round(voice_offset * 1000))
+            voice_delay = f",adelay={voice_delay_ms}|{voice_delay_ms}" if voice_delay_ms > 0 else ""
+            filter_complex += (
+                f"[{voice_idx}:a]atrim=start=0:duration={voice_duration},asetpts=PTS-STARTPTS,"
+                f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"apad=pad_dur={voice_duration},atrim=duration={voice_duration},volume={vol_voice}"
+                f"{voice_delay}[aout_voice_v]; "
+            )
 
         mix_tracks = []
-        if vol_orig > 0:
-            mix_tracks.append("[aout_orig_v]")
+        if has_original_audio:
+            mix_tracks.append("[aout_orig]")
         if vol_bgm > 0:
             mix_tracks.append("[aout_bgm_v]")
         if has_voice:
@@ -402,10 +481,40 @@ class VideoMatrixCore:
         audio_map = None
         if len(mix_tracks) > 1:
             inputs_str = "".join(mix_tracks)
-            filter_complex += f"{inputs_str}amix=inputs={len(mix_tracks)}:duration=longest:dropout_transition=2[aout]"
-            audio_map = "[aout]"
+            bgm_on_hook = cfg.get('apply_bgm_to_hook', True)
+            voice_on_hook = cfg.get('apply_voice_to_hook', True)
+            hook_mix_count = sum((
+                int(vol_hook_orig > 0),
+                int(vol_bgm > 0 and bgm_on_hook),
+                int(has_voice and voice_on_hook),
+            ))
+            body_mix_count = sum((
+                int(vol_orig > 0),
+                int(vol_bgm > 0),
+                int(has_voice),
+            ))
+            hook_mix_gain = 1.0 / max(1, hook_mix_count)
+            body_mix_gain = 1.0 / max(1, body_mix_count)
+            gain_expression = (
+                f"if(lt(t,{t_hook}),{hook_mix_gain:.8f},{body_mix_gain:.8f})"
+            )
+            filter_complex += (
+                f"{inputs_str}amix=inputs={len(mix_tracks)}:duration=longest:"
+                f"dropout_transition=0:normalize=0[aout_sum]; "
+                f"[aout_sum]volume='{gain_expression}':eval=frame[aout_mix]; "
+            )
+            audio_source = "[aout_mix]"
         elif len(mix_tracks) == 1:
-            audio_map = mix_tracks[0]
+            audio_source = mix_tracks[0]
+        else:
+            audio_source = None
+
+        if audio_source:
+            filter_complex += (
+                f"{audio_source}atrim=start=0:duration={t_total},"
+                f"asetpts=PTS-STARTPTS[aout_final]"
+            )
+            audio_map = "[aout_final]"
 
         filter_complex = filter_complex.strip('; ')
         out_name = f"{self.task_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{task_idx:03d}.mp4"
@@ -414,7 +523,7 @@ class VideoMatrixCore:
         cmd.extend(['-filter_complex', filter_complex, '-map', current_v])
         if audio_map:
             cmd.extend(['-map', audio_map, '-c:a', 'aac'])
-        cmd.extend(['-r', fps_val, '-b:v', cfg['bitrate']])
+        cmd.extend(['-r', fps_val, '-b:v', cfg['bitrate'], '-t', f"{t_total:.3f}"])
 
         success, error = render_video(cmd, cfg.get('enable_gpu', True), out_path, self.temp_dir_path)
 

@@ -7,6 +7,9 @@ import re
 from typing import Optional, Tuple, List
 
 
+MEDIA_END_SAFETY_MARGIN = 0.2
+
+
 def _find_tool(name: str) -> str:
     """在 exe 同目录、PyInstaller 临时目录、PATH 中查找工具。"""
     if getattr(sys, 'frozen', False):
@@ -95,8 +98,42 @@ def extract_media_info(info: dict, file_path: str) -> Tuple[float, bool, Optiona
                 except ValueError:
                     pass
     
-    dur = max(0.0, dur - 0.2)
+    dur = max(0.0, dur - MEDIA_END_SAFETY_MARGIN)
     return dur, has_audio, width, height, fps
+
+
+def extract_audio_duration(info: dict) -> float:
+    """Return the safe duration of the first audio stream."""
+    try:
+        format_duration = float(info.get('format', {}).get('duration', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        format_duration = 0.0
+    for stream in info.get('streams', []):
+        if stream.get('codec_type') != 'audio':
+            continue
+        duration = stream.get('duration')
+        if duration:
+            try:
+                stream_duration = float(duration)
+                return max(
+                    0.0,
+                    min(format_duration or stream_duration, stream_duration) - MEDIA_END_SAFETY_MARGIN,
+                )
+            except (TypeError, ValueError):
+                pass
+        tagged = stream.get('tags', {}).get('DURATION')
+        if tagged:
+            try:
+                h, m, sec = tagged.split(':')
+                tagged_duration = int(h) * 3600 + int(m) * 60 + float(sec)
+                return max(
+                    0.0,
+                    min(format_duration or tagged_duration, tagged_duration) - MEDIA_END_SAFETY_MARGIN,
+                )
+            except (TypeError, ValueError):
+                pass
+        return max(0.0, format_duration - MEDIA_END_SAFETY_MARGIN)
+    return 0.0
 
 
 def build_filter_complex(

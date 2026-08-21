@@ -69,9 +69,11 @@ interface AssetCardProps {
   pickAction?: string
   secondaryAction?: string
   onSecondaryAction?: () => void
+  applyToHook?: boolean
+  onApplyToHookChange?: (enabled: boolean) => void
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, applyToHook, onApplyToHookChange }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -130,6 +132,23 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
             className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
           >
             {secondaryAction}
+          </button>
+        )}
+        {applyToHook !== undefined && onApplyToHookChange && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={applyToHook}
+            onClick={() => onApplyToHookChange(!applyToHook)}
+            title={applyToHook ? '当前作用于 Hook，点击后仅作用于 Body' : '当前仅作用于 Body，点击后也作用于 Hook'}
+            className={cn(
+              'h-7 w-[52px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors',
+              applyToHook
+                ? 'border-accent/55 bg-accent/12 text-accent'
+                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground'
+            )}
+          >
+            {applyToHook ? 'Hook 开' : 'Hook 关'}
           </button>
         )}
         {filled && onClear && (

@@ -11,7 +11,7 @@ on:
       release_tag:
         description: "Release tag to upload the dmg to"
         required: true
-        default: "v2.0.0"
+        default: "v2.0.2"
   push:
     tags:
       - "v*"
@@ -114,6 +114,7 @@ jobs:
               --notes "Self-contained macOS dmg (Electron + FastAPI + ffmpeg, no Python required)."
           fi
           dmg=$(ls frontend/release/*.dmg | head -1)
-          upload_path="$(dirname "$dmg")/VideoMatrix.Setup.2.0.0-mac.dmg"
+          version=$(node -p "require('./frontend/package.json').version")
+          upload_path="$(dirname "$dmg")/VideoMatrix.Setup.${version}-mac.dmg"
           cp "$dmg" "$upload_path"
           gh release upload "$tag" "$upload_path" --repo "$GITHUB_REPOSITORY" --clobber

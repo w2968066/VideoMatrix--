@@ -10,10 +10,13 @@ const RESOLUTION_PRESETS = [
 ]
 
 // ─── Group ────────────────────────────────────────────────────────────────────
-function Group({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
+function Group({ title, children, className = '', action }: { title: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {
   return (
     <div className={className}>
-      <h2 className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground mb-1">{title}</h2>
+      <div className="mb-1 flex h-4 items-center justify-between">
+        <h2 className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{title}</h2>
+        {action}
+      </div>
       {children}
     </div>
   )
@@ -118,11 +121,23 @@ export default function SinglePage() {
   }, [tasks, addToast, appendLog])
 
   const running = tasks.filter(t => t.status === 'running').length
+  const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
     elapsed: t.output_elapsed?.[file],
   })))
   const setParam = (key: string, raw: string) => setConfig({ [key]: raw } as any)
+  const toggleFinishedHookMode = () => {
+    const enabled = !finishedHookMode
+    setConfig({
+      apply_bgm_to_hook: !enabled,
+      apply_voice_to_hook: !enabled,
+      apply_srt_to_hook: !enabled,
+      apply_watermark_to_hook: !enabled,
+      vol_hook_orig: enabled ? 100 : config.vol_orig,
+    })
+    addToast(enabled ? '已启用成品 Hook 保护' : '已恢复全片效果', 'success')
+  }
   const splitPathList = (raw: string) =>
     raw.split(';').map(p => p.trim()).filter(Boolean)
   const openConfiguredPath = (raw: string, fileMode = false) => {
@@ -304,7 +319,20 @@ export default function SinglePage() {
           <div className="flex flex-col gap-2 min-h-0 overflow-hidden">
 
             {/* Sources — long path inputs */}
-            <Group title="素材">
+            <Group title="素材" action={(
+              <button
+                type="button"
+                onClick={toggleFinishedHookMode}
+                title="关闭 BGM、配音、字幕、水印对 Hook 的二次处理，并将 Hook 原声设为 100%"
+                className={`h-5 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
+                  finishedHookMode
+                    ? 'border-accent bg-accent text-background'
+                    : 'border-white/[0.10] bg-white/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
+                }`}
+              >
+                成品 Hook
+              </button>
+            )}>
               <div className="grid grid-cols-1 gap-1.5">
                 <AssetCard kind="hook"      label="Hook 首段" value={config.hook_dir}             count={scannedFiles.hook?.count} required
                   onChange={(v) => setConfig({ hook_dir: v })}
@@ -318,18 +346,22 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ bgm_dir: v })}
                   onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
                   onBrowse={() => browse('bgm_dir')}         secondaryAction="视频" onSecondaryAction={browseBgmVideo}
+                  applyToHook={config.apply_bgm_to_hook} onApplyToHookChange={(v) => setConfig({ apply_bgm_to_hook: v })}
                   onClear={() => setConfig({ bgm_dir: '' })} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
                   onChange={(v) => setConfig({ voice_dir: v })}
                   onOpen={() => openConfiguredPath(config.voice_dir || '')}
+                  applyToHook={config.apply_voice_to_hook} onApplyToHookChange={(v) => setConfig({ apply_voice_to_hook: v })}
                   onBrowse={() => browse('voice_dir')}       onClear={() => setConfig({ voice_dir: '' })} />
                 <AssetCard kind="srt"       label="字幕"      value={config.srt_dir || ''}
                   onChange={(v) => setConfig({ srt_dir: v })}
                   onOpen={() => openConfiguredPath(config.srt_dir || '')}
+                  applyToHook={config.apply_srt_to_hook} onApplyToHookChange={(v) => setConfig({ apply_srt_to_hook: v })}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '' })} />
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
                   onOpen={() => openConfiguredPath(config.watermark_path || '', true)}
+                  applyToHook={config.apply_watermark_to_hook} onApplyToHookChange={(v) => setConfig({ apply_watermark_to_hook: v })}
                   onBrowse={() => browseFile('watermark_path')} onClear={() => setConfig({ watermark_path: '' })} />
                 <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir}
                   onChange={(v) => setConfig({ base_out_dir: v })}
@@ -356,7 +388,8 @@ export default function SinglePage() {
                     <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
                     <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
                     <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
-                    <ParamRow label="原声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
+                    <ParamRow label="Hook声" value={config.vol_hook_orig} suffix="%" onChange={(v) => setParam('vol_hook_orig', v)} />
+                    <ParamRow label="Body声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
                     <ParamRow label="BGM" value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
                   </div>
                 </Group>

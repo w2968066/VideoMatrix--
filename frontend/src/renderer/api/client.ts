@@ -10,7 +10,7 @@ function formatApiError(detail: unknown, fallback: string): string {
   const fieldLabels: Record<string, string> = {
     hook_r: 'Hook 重叠率', body_r: 'Body 重叠率', bgm_r: 'BGM 重叠率',
     t_hook: '首段时长', t_body: '后段时长', total_clips: '片段数',
-    target_count: '生成数量', concurrent_tasks: '并发数',
+    target_count: '生成数量', concurrent_tasks: '并发数', vol_hook_orig: 'Hook 原声音量',
   }
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
@@ -61,8 +61,13 @@ export interface VideoConfig {
   fps: string | number
   bitrate: string
   vol_orig: string | number
+  vol_hook_orig: string | number
   vol_bgm: string | number
   vol_voice: string | number
+  apply_bgm_to_hook: boolean
+  apply_voice_to_hook: boolean
+  apply_srt_to_hook: boolean
+  apply_watermark_to_hook: boolean
   enable_srt: boolean
   enable_gpu: boolean
   concurrent_tasks?: string | number

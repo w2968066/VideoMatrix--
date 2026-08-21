@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Release tag to upload the installer to"
         required: true
-        default: "v2.0.0"
+        default: "v2.0.2"
   push:
     tags:
       - "v*"
@@ -100,6 +100,7 @@ jobs:
               --notes "Self-contained Windows installer (Electron + FastAPI + ffmpeg, no Python required)."
           }
           $installer = Get-ChildItem -Path frontend/release -Filter "*.exe" | Select-Object -First 1
-          $uploadPath = Join-Path $installer.DirectoryName "VideoMatrix.Setup.2.0.0.exe"
+          $version = (Get-Content frontend/package.json -Raw | ConvertFrom-Json).version
+          $uploadPath = Join-Path $installer.DirectoryName "VideoMatrix.Setup.$version.exe"
           Copy-Item -LiteralPath $installer.FullName -Destination $uploadPath -Force
           gh release upload $tag $uploadPath --repo $env:GITHUB_REPOSITORY --clobber

@@ -54,8 +54,13 @@ const defaultConfig: VideoConfig = {
   fps: '30',
   bitrate: '5000k',
   vol_orig: 80,
+  vol_hook_orig: 80,
   vol_bgm: 30,
   vol_voice: 100,
+  apply_bgm_to_hook: true,
+  apply_voice_to_hook: true,
+  apply_srt_to_hook: true,
+  apply_watermark_to_hook: true,
   enable_srt: false,
   enable_gpu: true,
   concurrent_tasks: 3,
@@ -65,7 +70,12 @@ function loadSavedConfig(): VideoConfig {
   try {
     const raw = localStorage.getItem('vm-config')
     if (!raw) return { ...defaultConfig }
-    return { ...defaultConfig, ...JSON.parse(raw) }
+    const saved = JSON.parse(raw)
+    return {
+      ...defaultConfig,
+      ...saved,
+      vol_hook_orig: saved.vol_hook_orig ?? saved.vol_orig ?? defaultConfig.vol_hook_orig,
+    }
   } catch {
     return { ...defaultConfig }
   }

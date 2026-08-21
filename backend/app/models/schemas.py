@@ -26,9 +26,15 @@ class VideoConfig(BaseModel):
     fps: Union[str, float, int] = Field(default="30", description="输出帧率")
     bitrate: str = Field(default="5000k", description="视频码率")
     
-    vol_orig: int = Field(default=80, ge=0, le=200, description="原声音量(%)")
+    vol_orig: int = Field(default=80, ge=0, le=200, description="Body原声音量(%)")
+    vol_hook_orig: Optional[int] = Field(default=None, ge=0, le=200, description="Hook原声音量(%)")
     vol_bgm: int = Field(default=30, ge=0, le=200, description="BGM音量(%)")
     vol_voice: int = Field(default=100, ge=0, le=200, description="配音音量(%)")
+
+    apply_bgm_to_hook: bool = Field(default=True, description="BGM是否作用于Hook")
+    apply_voice_to_hook: bool = Field(default=True, description="配音是否作用于Hook")
+    apply_srt_to_hook: bool = Field(default=True, description="字幕是否作用于Hook")
+    apply_watermark_to_hook: bool = Field(default=True, description="水印是否作用于Hook")
     
     enable_srt: bool = Field(default=False, description="是否启用硬字幕")
     enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
