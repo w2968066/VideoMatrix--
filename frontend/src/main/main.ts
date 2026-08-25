@@ -8,8 +8,58 @@ let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
 let isQuitting = false
 
+const PREPARE_ARG = '--videomatrix-prepare='
+const PREPARE_FIELDS = new Set([
+  'task_name', 'hook_dir', 'body_dirs', 'bgm_dir', 'voice_dir', 'srt_dir',
+  'watermark_path', 'base_out_dir', 't_hook', 't_body', 'total_clips',
+  'target_count', 'hook_r', 'body_r', 'bgm_r', 'resolution', 'fps', 'bitrate',
+  'vol_orig', 'vol_hook_orig', 'vol_bgm', 'vol_voice', 'apply_bgm_to_hook',
+  'apply_voice_to_hook', 'apply_srt_to_hook', 'apply_watermark_to_hook',
+  'enable_srt', 'enable_gpu', 'concurrent_tasks',
+])
+
+interface PrepareRequest {
+  config: Record<string, unknown>
+  ackPath: string
+}
+
+function readPrepareUpdate(argv: string[]): PrepareRequest | null {
+  const argument = argv.find((value) => value.startsWith(PREPARE_ARG))
+  if (!argument) return null
+  const payloadPath = path.resolve(argument.slice(PREPARE_ARG.length))
+  const tempDir = path.resolve(os.tmpdir()).toLowerCase()
+  const validPayloadPath = path.dirname(payloadPath).toLowerCase() === tempDir
+    && path.basename(payloadPath).startsWith('videomatrix-prepare-')
+  if (!validPayloadPath) return null
+  try {
+    const payload = JSON.parse(fs.readFileSync(payloadPath, 'utf8')) as {
+      version?: number
+      config?: Record<string, unknown>
+      ack_path?: string
+    }
+    if (payload.version !== 1 || !payload.config || typeof payload.config !== 'object') return null
+    const ackPath = typeof payload.ack_path === 'string' ? path.resolve(payload.ack_path) : ''
+    const validAckPath = ackPath
+      && path.dirname(ackPath).toLowerCase() === tempDir
+      && path.basename(ackPath).startsWith('videomatrix-prepare-ack-')
+    return {
+      config: Object.fromEntries(
+        Object.entries(payload.config).filter(([key]) => PREPARE_FIELDS.has(key))
+      ),
+      ackPath: validAckPath ? ackPath : '',
+    }
+  } catch (error) {
+    errorDev(`[Agent] failed to read prepare payload: ${String(error)}`)
+    return null
+  } finally {
+    try { fs.unlinkSync(payloadPath) } catch { /* one-shot file may already be gone */ }
+  }
+}
+
 const isDev = process.env.NODE_ENV === 'development'
 const BACKEND_PORT = 8765
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+let pendingPrepareRequest = hasSingleInstanceLock ? readPrepareUpdate(process.argv) : null
 
 function logDev(message: string) {
   if (isDev) {
@@ -154,6 +204,23 @@ function createWindow() {
     mainWindow?.show()
   })
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!mainWindow || !pendingPrepareRequest) return
+    const request = pendingPrepareRequest
+    pendingPrepareRequest = null
+    const serialized = JSON.stringify(request.config).replace(/</g, '\\u003c')
+    void mainWindow.webContents.executeJavaScript(`
+      (() => {
+        let current = {};
+        try { current = JSON.parse(localStorage.getItem('vm-config') || '{}'); } catch {}
+        localStorage.setItem('vm-config', JSON.stringify({ ...current, ...${serialized} }));
+      })()
+    `).then(() => {
+      if (request.ackPath) fs.writeFileSync(request.ackPath, '{"ok":true}', 'utf8')
+      mainWindow?.webContents.reload()
+    })
+  })
+
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault()
@@ -191,28 +258,42 @@ ipcMain.handle('shell:openPath', async (_, filePath: string) => {
 ipcMain.handle('app:getBackendPort', () => BACKEND_PORT)
 
 // 应用生命周期
-app.whenReady().then(() => {
-  startBackend()
-  // 等待后端启动
-  setTimeout(createWindow, 1500)
-})
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    const request = readPrepareUpdate(commandLine)
+    if (request) pendingPrepareRequest = request
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+      if (request) mainWindow.webContents.reload()
+    }
+  })
 
-app.on('window-all-closed', () => {
-  if (!isQuitting) {
-    void shutdownApp()
-  }
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+  app.whenReady().then(() => {
+    startBackend()
+    // 等待后端启动
+    setTimeout(createWindow, 1500)
+  })
 
-app.on('activate', () => {
-  if (mainWindow === null) {
-    createWindow()
-  }
-})
+  app.on('window-all-closed', () => {
+    if (!isQuitting) {
+      void shutdownApp()
+    }
+    if (process.platform !== 'darwin') {
+      app.quit()
+    }
+  })
 
-app.on('before-quit', () => {
-  isQuitting = true
-  stopBackend()
-})
+  app.on('activate', () => {
+    if (mainWindow === null) {
+      createWindow()
+    }
+  })
+
+  app.on('before-quit', () => {
+    isQuitting = true
+    stopBackend()
+  })
+}

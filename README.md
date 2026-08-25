@@ -61,6 +61,29 @@ flowchart LR
 - 支持 GPU 加速。实际速度取决于素材、分辨率、显卡和并发设置。
 - 支持预检产能和智能压测。
 - 支持历史记录，避免重复使用已经用过的片段。
+- 支持 Codex 等 Agent 打开软件、识别并填写 Hook / Body / BGM 等路径和混剪参数。
+
+## Agent 工作流
+
+仓库包含独立的 `agent_adapter` 适配层和 VideoMatrix Skill。它们只调用现有桌面程序与后端，不另写混剪核心。
+
+默认采用半自动模式：Agent 只打开 VideoMatrix，并把用户明确提供的素材路径和参数合并到软件上次设置；不会自动点击预检或开始渲染。只有用户明确要求“预检”或“直接开始”时，Agent 才会执行相应动作。
+
+支持自然语言换算视频结构。例如：
+
+```text
+这个目录是 Hook，那个目录是 Body，整条 12 秒，首段 3 秒，使用默认配置打开软件。
+```
+
+适配层会填写 Hook `3` 秒、Body `1.8` 秒、总片段数 `6`，并使用竖屏 2K、`8000k`、`24fps`；用户检查后再手动开始。省略“使用默认配置”时，软件原有的时长、音量、分辨率和并发等设置保持不变。
+
+一键接入本机 Codex：
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File agent_adapter/install_codex.ps1
+```
+
+详细命令与 MCP 工具见 [`agent_adapter/README.md`](agent_adapter/README.md)。
 
 ## 使用前预处理
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "VideoMatrix"
+  short_description: "准备或执行本机 VideoMatrix 混剪"
+  default_prompt: "打开 VideoMatrix 并准备本次混剪设置，不要自动开始渲染。"
