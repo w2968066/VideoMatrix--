@@ -64,6 +64,13 @@ const defaultConfig: VideoConfig = {
   enable_srt: false,
   enable_gpu: true,
   concurrent_tasks: 3,
+  enable_variants: false,
+  variant_strength: 'balanced',
+  variant_hook: true,
+  variant_body: true,
+  variant_mirror: false,
+  variant_frame_mix: true,
+  variant_seed: null,
 }
 
 function loadSavedConfig(): VideoConfig {
@@ -75,6 +82,12 @@ function loadSavedConfig(): VideoConfig {
       ...defaultConfig,
       ...saved,
       vol_hook_orig: saved.vol_hook_orig ?? saved.vol_orig ?? defaultConfig.vol_hook_orig,
+      // V1 exposes a single final-output transformer, so legacy hidden scope/random
+      // options must not silently alter the new behavior.
+      variant_hook: true,
+      variant_body: true,
+      variant_mirror: false,
+      variant_frame_mix: true,
     }
   } catch {
     return { ...defaultConfig }

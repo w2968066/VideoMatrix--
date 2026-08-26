@@ -15,7 +15,9 @@ const PREPARE_FIELDS = new Set([
   'target_count', 'hook_r', 'body_r', 'bgm_r', 'resolution', 'fps', 'bitrate',
   'vol_orig', 'vol_hook_orig', 'vol_bgm', 'vol_voice', 'apply_bgm_to_hook',
   'apply_voice_to_hook', 'apply_srt_to_hook', 'apply_watermark_to_hook',
-  'enable_srt', 'enable_gpu', 'concurrent_tasks',
+  'enable_srt', 'enable_gpu', 'concurrent_tasks', 'enable_variants',
+  'variant_strength', 'variant_hook', 'variant_body', 'variant_mirror',
+  'variant_frame_mix', 'variant_seed',
 ])
 
 interface PrepareRequest {
@@ -233,22 +235,63 @@ function createWindow() {
   })
 }
 
+function resolveDialogDefaultPath(rawPath?: string): string | undefined {
+  if (!rawPath?.trim()) return undefined
+
+  let candidate = path.resolve(rawPath.trim())
+  try {
+    if (fs.statSync(candidate).isFile()) candidate = path.dirname(candidate)
+  } catch {
+    let parent = candidate
+    while (true) {
+      const next = path.dirname(parent)
+      if (next === parent) return undefined
+      parent = next
+      try {
+        if (fs.statSync(parent).isDirectory()) {
+          candidate = parent
+          break
+        }
+      } catch { /* keep walking to the nearest existing parent */ }
+    }
+  }
+
+  try {
+    return fs.statSync(candidate).isDirectory() ? candidate : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // IPC 处理器
-ipcMain.handle('dialog:openDirectory', async () => {
+ipcMain.handle('dialog:openDirectory', async (_, defaultPath?: string) => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
+    defaultPath: resolveDialogDefaultPath(defaultPath),
   })
   return result.canceled ? null : result.filePaths[0]
 })
 
-ipcMain.handle('dialog:openFile', async (_, filters) => {
+ipcMain.handle('dialog:openFile', async (_, filters, defaultPath?: string) => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: filters || [{ name: 'All Files', extensions: ['*'] }],
+    defaultPath: resolveDialogDefaultPath(defaultPath),
   })
   return result.canceled ? null : result.filePaths[0]
+})
+
+ipcMain.handle('dialog:saveText', async (_, defaultName: string, content: string, filters) => {
+  if (!mainWindow) return null
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: filters || [{ name: 'Text', extensions: ['txt'] }],
+  })
+  if (result.canceled || !result.filePath) return null
+  fs.writeFileSync(result.filePath, content, 'utf8')
+  return result.filePath
 })
 
 ipcMain.handle('shell:openPath', async (_, filePath: string) => {

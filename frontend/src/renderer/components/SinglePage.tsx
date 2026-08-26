@@ -9,6 +9,52 @@ const RESOLUTION_PRESETS = [
   { label: '2K', value: '1440*2560' },
 ]
 
+const VARIANT_STRENGTH_INFO = {
+  mild: {
+    label: '轻度',
+    description: '变化最小，优先保持原画面构图与观感，适合对画质和主体位置敏感的成品。',
+  },
+  balanced: {
+    label: '标准',
+    description: '变化幅度与原画观感较均衡，适合大多数日常混剪任务，推荐默认使用。',
+  },
+  strong: {
+    label: '增强',
+    description: '裁切、色彩和帧混合变化更明显，适合能够接受较强画面变化的成品。',
+  },
+} as const
+
+const LAST_BROWSE_DIRS_KEY = 'vm-last-browse-dirs'
+
+function readLastBrowseDirs(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_BROWSE_DIRS_KEY) || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function parentDirectory(filePath: string): string {
+  const value = filePath.trim()
+  const separatorIndex = Math.max(value.lastIndexOf('\\'), value.lastIndexOf('/'))
+  if (separatorIndex < 0) return ''
+  if (separatorIndex === 2 && value[1] === ':') return value.slice(0, 3)
+  return value.slice(0, separatorIndex)
+}
+
+function rememberBrowseDirectory(key: string, selectedPath: string, fileMode = false) {
+  const remembered = readLastBrowseDirs()
+  remembered[key] = fileMode ? parentDirectory(selectedPath) : selectedPath
+  localStorage.setItem(LAST_BROWSE_DIRS_KEY, JSON.stringify(remembered))
+}
+
+function browseStartDirectory(key: string, currentPath: string, fileMode = false): string | undefined {
+  const configured = currentPath.split(';').map((item) => item.trim()).filter(Boolean).at(-1) || ''
+  const configuredDirectory = fileMode ? parentDirectory(configured) : configured
+  return configuredDirectory || readLastBrowseDirs()[key] || undefined
+}
+
 // ─── Group ────────────────────────────────────────────────────────────────────
 function Group({ title, children, className = '', action }: { title: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {
   return (
@@ -89,10 +135,11 @@ function TaskRow({ task }: { task: TaskStatus }) {
 export default function SinglePage() {
   const { config, setConfig, tasks, logs, appendLog, clearLogs, addToast, scannedFiles } = useStore()
   const [isRunning, setIsRunning] = useState(false)
-  const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output'>('log')
+  const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output' | 'variant'>('log')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
   const [benchmarkRunning, setBenchmarkRunning] = useState(false)
   const [benchmarkProgress, setBenchmarkProgress] = useState(0)
+  const [preflightRunning, setPreflightRunning] = useState(false)
   const [completionNotice, setCompletionNotice] = useState<string | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const taskStatusRef = useRef<Record<string, string>>({})
@@ -155,31 +202,55 @@ export default function SinglePage() {
       return null
     }
     const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
-    return { ...config, body_dirs: bodyDirs }
+    const parsedConcurrency = Number(config.concurrent_tasks)
+    const concurrentTasks = Number.isFinite(parsedConcurrency) && parsedConcurrency >= 1
+      ? Math.floor(parsedConcurrency)
+      : 3
+    if (concurrentTasks !== config.concurrent_tasks) {
+      setConfig({ concurrent_tasks: concurrentTasks })
+    }
+    return { ...config, body_dirs: bodyDirs, concurrent_tasks: concurrentTasks }
   }
 
   const browse = async (key: string, multi = false) => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
-    const path = await window.electronAPI.openDirectory()
-    if (!path) return
-    if (key === 'body_dirs') setConfig({ body_dirs: multi ? [...config.body_dirs, path] : [path] })
-    else setConfig({ [key]: path } as any)
+    const currentPath = key === 'body_dirs'
+      ? config.body_dirs.join(';')
+      : String(config[key as keyof typeof config] || '')
+    const selectedPath = await window.electronAPI.openDirectory(
+      browseStartDirectory(key, currentPath, isFilePath(currentPath))
+    )
+    if (!selectedPath) return
+    rememberBrowseDirectory(key, selectedPath)
+    if (key === 'body_dirs') setConfig({ body_dirs: multi ? [...config.body_dirs, selectedPath] : [selectedPath] })
+    else setConfig({ [key]: selectedPath } as any)
   }
 
   const browseFile = async (key: string) => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
-    const path = await window.electronAPI.openFile([{ name: 'Images', extensions: ['png', 'gif', 'jpg'] }])
-    if (path) setConfig({ [key]: path } as any)
+    const currentPath = String(config[key as keyof typeof config] || '')
+    const selectedPath = await window.electronAPI.openFile(
+      [{ name: 'Images', extensions: ['png', 'gif', 'jpg'] }],
+      browseStartDirectory(key, currentPath, true),
+    )
+    if (selectedPath) {
+      rememberBrowseDirectory(key, selectedPath, true)
+      setConfig({ [key]: selectedPath } as any)
+    }
   }
 
   const browseBgmVideo = async () => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
-    const path = await window.electronAPI.openFile([{
-      name: '带声音的视频',
-      extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm'],
-    }])
-    if (path) {
-      setConfig({ bgm_dir: path })
+    const selectedPath = await window.electronAPI.openFile(
+      [{
+        name: '带声音的视频',
+        extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm'],
+      }],
+      browseStartDirectory('bgm_dir', config.bgm_dir, isFilePath(config.bgm_dir)),
+    )
+    if (selectedPath) {
+      rememberBrowseDirectory('bgm_dir', selectedPath, true)
+      setConfig({ bgm_dir: selectedPath })
       addToast('已选择视频音轨作为 BGM', 'success')
     }
   }
@@ -200,7 +271,11 @@ export default function SinglePage() {
 
   const preFlight = async () => {
     const runConfig = ensureRunConfig()
-    if (!runConfig) return
+    if (!runConfig || preflightRunning) return
+    setPreflightRunning(true)
+    setRightTab('log')
+    clearLogs()
+    appendLog('>>> [预检] 正在扫描素材，请稍候...')
     try {
       const res = await api.preflight(runConfig)
       clearLogs()
@@ -208,7 +283,13 @@ export default function SinglePage() {
       appendLog(`>>> 预检完成。总可用首段产能预估: ${res.capacity}`)
       addToast('预检完成', res.ok ? 'success' : 'error')
     }
-    catch (e: any) { addToast(e.message, 'error') }
+    catch (e: any) {
+      const message = e?.message || '预检请求失败'
+      appendLog(`[预检失败] ${message}`)
+      addToast(message, 'error')
+    } finally {
+      setPreflightRunning(false)
+    }
   }
 
   const benchmark = async () => {
@@ -346,22 +427,22 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ bgm_dir: v })}
                   onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
                   onBrowse={() => browse('bgm_dir')}         secondaryAction="视频" onSecondaryAction={browseBgmVideo}
-                  applyToHook={config.apply_bgm_to_hook} onApplyToHookChange={(v) => setConfig({ apply_bgm_to_hook: v })}
+                  bodyOnly={!config.apply_bgm_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_bgm_to_hook: !v })}
                   onClear={() => setConfig({ bgm_dir: '' })} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
                   onChange={(v) => setConfig({ voice_dir: v })}
                   onOpen={() => openConfiguredPath(config.voice_dir || '')}
-                  applyToHook={config.apply_voice_to_hook} onApplyToHookChange={(v) => setConfig({ apply_voice_to_hook: v })}
+                  bodyOnly={!config.apply_voice_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_voice_to_hook: !v })}
                   onBrowse={() => browse('voice_dir')}       onClear={() => setConfig({ voice_dir: '' })} />
                 <AssetCard kind="srt"       label="字幕"      value={config.srt_dir || ''}
                   onChange={(v) => setConfig({ srt_dir: v })}
                   onOpen={() => openConfiguredPath(config.srt_dir || '')}
-                  applyToHook={config.apply_srt_to_hook} onApplyToHookChange={(v) => setConfig({ apply_srt_to_hook: v })}
+                  bodyOnly={!config.apply_srt_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_srt_to_hook: !v })}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '' })} />
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
                   onOpen={() => openConfiguredPath(config.watermark_path || '', true)}
-                  applyToHook={config.apply_watermark_to_hook} onApplyToHookChange={(v) => setConfig({ apply_watermark_to_hook: v })}
+                  bodyOnly={!config.apply_watermark_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_watermark_to_hook: !v })}
                   onBrowse={() => browseFile('watermark_path')} onClear={() => setConfig({ watermark_path: '' })} />
                 <AssetCard kind="output"    label="输出目录"  value={config.base_out_dir}
                   onChange={(v) => setConfig({ base_out_dir: v })}
@@ -396,8 +477,8 @@ export default function SinglePage() {
               </div>
 
               <div className="flex flex-col items-stretch justify-center gap-1 border-l border-white/[0.055] pl-2.5">
-                <button type="button" onClick={preFlight} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover">
-                  预检产能
+                <button type="button" onClick={preFlight} disabled={preflightRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:cursor-wait disabled:opacity-70">
+                  {preflightRunning ? '预检中...' : '预检产能'}
                 </button>
                 <button type="button" onClick={startRender} disabled={isRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
                   {isRunning ? '启动中…' : '启动渲染'}
@@ -465,6 +546,7 @@ export default function SinglePage() {
                 { k: 'log',    label: '日志', count: logs.length },
                 { k: 'tasks',  label: '任务', count: tasks.length },
                 { k: 'output', label: '产出', count: allOutputItems.length },
+                { k: 'variant', label: '去重变换', count: config.enable_variants ? 'ON' : 'OFF' },
               ] as const).map(t => (
                 <button
                   key={t.k}
@@ -563,6 +645,79 @@ export default function SinglePage() {
                       </div>
                     ))
                   )}
+                </div>
+              )}
+
+              {/* OUTPUT TRANSFORMER */}
+              {rightTab === 'variant' && (
+                <div className="absolute inset-0 bg-black/25 px-5 py-5">
+                  <div className="flex items-center justify-between border-b border-white/[0.06] pb-4">
+                    <div>
+                      <div className="text-[13px] font-semibold text-foreground">成品去重变换</div>
+                      <div className="mt-1 font-mono text-[10px] text-muted-foreground">OUTPUT TRANSFORMER V1</div>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <span className={`text-[11px] ${config.enable_variants ? 'text-accent' : 'text-muted-foreground'}`}>
+                        {config.enable_variants ? '已开启' : '已关闭'}
+                      </span>
+                      <Checkbox
+                        checked={config.enable_variants}
+                        onCheckedChange={(v) => setConfig({
+                          enable_variants: v as boolean,
+                          variant_hook: true,
+                          variant_body: true,
+                          variant_mirror: false,
+                          variant_frame_mix: true,
+                        })}
+                      />
+                    </label>
+                  </div>
+
+                  <div className={`space-y-5 pt-5 transition-opacity ${config.enable_variants ? 'opacity-100' : 'pointer-events-none opacity-40'}`}>
+                    <div className="rounded-[5px] border border-white/[0.08] bg-white/[0.02] px-3 py-3 text-[11px] leading-5 text-foreground/80">
+                      混剪完成后自动处理最终成品。关闭时不增加任何处理步骤，也不会修改 Hook、Body 等源素材。
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">强度</div>
+                      <div className="grid grid-cols-3 gap-1 rounded-[5px] border border-white/[0.08] bg-white/[0.02] p-1">
+                        {([
+                          { value: 'mild', label: VARIANT_STRENGTH_INFO.mild.label },
+                          { value: 'balanced', label: VARIANT_STRENGTH_INFO.balanced.label },
+                          { value: 'strong', label: VARIANT_STRENGTH_INFO.strong.label },
+                        ] as const).map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => {
+                              setConfig({ variant_strength: item.value })
+                              addToast(`${item.label}：${VARIANT_STRENGTH_INFO[item.value].description}`, 'info')
+                            }}
+                            className={`h-8 rounded-[3px] text-[11px] font-semibold transition-colors ${
+                              config.variant_strength === item.value
+                                ? 'bg-accent text-background'
+                                : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground'
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 rounded-[4px] border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[11px] leading-5 text-foreground/80">
+                        <span className="mr-1 font-semibold text-accent">
+                          {VARIANT_STRENGTH_INFO[config.variant_strength].label}：
+                        </span>
+                        {VARIANT_STRENGTH_INFO[config.variant_strength].description}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-white/[0.06] pt-4 font-mono text-[10px]">
+                      <div className="flex justify-between"><span className="text-muted-foreground">处理对象</span><span className="text-accent">最终成品</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">源素材</span><span className="text-ok">不修改</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">输出规格</span><span className="text-ok">保持</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">失败策略</span><span className="text-ok">保留原成品</span></div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

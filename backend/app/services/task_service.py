@@ -4,10 +4,13 @@ import time
 import uuid
 import threading
 import concurrent.futures
+import random
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Callable
 
 from ..core.video_matrix import VideoMatrixCore, SharedMediaCache
+from ..core.video_variant import VideoVariantProcessor, derive_variant_seed
 from ..models.schemas import VideoConfig, TaskStatus
 
 
@@ -19,6 +22,8 @@ class TaskService:
         self.cores_lock = threading.Lock()
         self.log_buffers: Dict[str, List[str]] = {}
         self._log_lock = threading.Lock()
+        self.variant_processor = VideoVariantProcessor()
+        self.variant_processes: Dict[str, set[subprocess.Popen]] = {}
 
     def _create_log_callback(self, task_id: str) -> Callable:
         def callback(message: str):
@@ -36,6 +41,9 @@ class TaskService:
         if isinstance(body_dirs, str):
             body_dirs = [p.strip() for p in body_dirs.split(';') if p.strip()]
         normalized['body_dirs'] = body_dirs
+
+        if normalized.get('enable_variants') and normalized.get('variant_seed') is None:
+            normalized['variant_seed'] = random.SystemRandom().randrange(0, 2**63)
 
         if not normalized.get('base_out_dir', '').strip():
             h_dir = normalized.get('hook_dir', '').rstrip('/\\')
@@ -188,17 +196,56 @@ class TaskService:
             status.updated_at = datetime.now()
             with self.cores_lock:
                 self.active_cores.pop(task_id, None)
+                self.variant_processes.pop(task_id, None)
 
     def _render_job(self, core: VideoMatrixCore, idx: int, status: TaskStatus) -> bool:
         if status.status == "stopped" or not core.is_running:
             return False
         result, output_path, elapsed = core.render_single_video(idx, return_result=True)
+        if result and output_path and core.config.get('enable_variants'):
+            variant_started = time.time()
+            seed = derive_variant_seed(
+                int(core.config.get('variant_seed') or 0), core.task_name, idx,
+            )
+            try:
+                ok, error, summary = self.variant_processor.process(
+                    output_path,
+                    core.config,
+                    seed,
+                    is_cancelled=lambda: status.status == "stopped" or not core.is_running,
+                    on_process=lambda process: self._track_variant_process(status.task_id, process),
+                )
+            except Exception as exc:
+                ok, error, summary = False, str(exc), None
+            elapsed = round((elapsed or 0) + time.time() - variant_started, 1)
+            if status.status == "stopped" or not core.is_running:
+                return False
+            if ok:
+                core.log(
+                    f"    [{core.task_name}] 成品变换完成：{summary['segments']} 段独立随机，"
+                    f"镜像 {summary['mirrored']} 段，帧混合 {summary['frame_mixed']} 段，"
+                    f"seed={summary['seed']}"
+                )
+            else:
+                core.log(f"    [{core.task_name}] 成品变换警告：{error or '处理失败'}，已保留原成片。")
         if result and output_path and status.task_id in self.tasks:
             if output_path not in self.tasks[status.task_id].output_files:
                 self.tasks[status.task_id].output_files.append(output_path)
             if elapsed is not None:
                 self.tasks[status.task_id].output_elapsed[output_path] = elapsed
         return result
+
+    def _track_variant_process(self, task_id: str, process: Optional[subprocess.Popen]):
+        with self.cores_lock:
+            processes = self.variant_processes.setdefault(task_id, set())
+            if process is None:
+                processes_copy = {item for item in processes if item.poll() is None}
+                if processes_copy:
+                    self.variant_processes[task_id] = processes_copy
+                else:
+                    self.variant_processes.pop(task_id, None)
+            else:
+                processes.add(process)
 
     def stop_task(self, task_id: str) -> bool:
         if task_id not in self.tasks:
@@ -208,6 +255,12 @@ class TaskService:
             cores = self.active_cores.get(task_id, [])
             for core in cores:
                 core.stop()
+            for process in list(self.variant_processes.get(task_id, set())):
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+            self.variant_processes.pop(task_id, None)
         return True
 
     def stop_all_tasks(self) -> int:

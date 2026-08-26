@@ -71,6 +71,13 @@ export interface VideoConfig {
   enable_srt: boolean
   enable_gpu: boolean
   concurrent_tasks?: string | number
+  enable_variants: boolean
+  variant_strength: 'mild' | 'balanced' | 'strong'
+  variant_hook: boolean
+  variant_body: boolean
+  variant_mirror: boolean
+  variant_frame_mix: boolean
+  variant_seed?: number | null
 }
 
 export interface TaskStatus {

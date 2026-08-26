@@ -40,6 +40,14 @@ class VideoConfig(BaseModel):
     enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
     concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 
+    enable_variants: bool = Field(default=False, description="启用混剪后的成品变换层")
+    variant_strength: Literal["mild", "balanced", "strong"] = Field(default="balanced", description="变体强度")
+    variant_hook: bool = Field(default=True, description="变体作用于 Hook")
+    variant_body: bool = Field(default=True, description="变体作用于 Body")
+    variant_mirror: bool = Field(default=False, description="允许随机镜像")
+    variant_frame_mix: bool = Field(default=True, description="允许相邻帧低权重混合")
+    variant_seed: Optional[int] = Field(default=None, ge=0, description="任务级随机种子")
+
 
 class TaskStatus(BaseModel):
     task_id: str

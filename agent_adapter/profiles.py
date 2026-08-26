@@ -34,6 +34,13 @@ BASE_CONFIG: dict[str, Any] = {
     "enable_srt": False,
     "enable_gpu": True,
     "concurrent_tasks": 3,
+    "enable_variants": False,
+    "variant_strength": "balanced",
+    "variant_hook": True,
+    "variant_body": True,
+    "variant_mirror": False,
+    "variant_frame_mix": True,
+    "variant_seed": None,
 }
 
 PRESETS: dict[str, dict[str, Any]] = {

@@ -69,11 +69,11 @@ interface AssetCardProps {
   pickAction?: string
   secondaryAction?: string
   onSecondaryAction?: () => void
-  applyToHook?: boolean
-  onApplyToHookChange?: (enabled: boolean) => void
+  bodyOnly?: boolean
+  onBodyOnlyChange?: (enabled: boolean) => void
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, applyToHook, onApplyToHookChange }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, bodyOnly, onBodyOnlyChange }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -134,21 +134,21 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
             {secondaryAction}
           </button>
         )}
-        {applyToHook !== undefined && onApplyToHookChange && (
+        {bodyOnly !== undefined && onBodyOnlyChange && (
           <button
             type="button"
             role="switch"
-            aria-checked={applyToHook}
-            onClick={() => onApplyToHookChange(!applyToHook)}
-            title={applyToHook ? '当前作用于 Hook，点击后仅作用于 Body' : '当前仅作用于 Body，点击后也作用于 Hook'}
+            aria-checked={bodyOnly}
+            onClick={() => onBodyOnlyChange(!bodyOnly)}
+            title={bodyOnly ? '当前仅作用于 Body，点击后改为全片生效' : '当前全片生效，点击后仅作用于 Body'}
             className={cn(
               'h-7 w-[52px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors',
-              applyToHook
+              bodyOnly
                 ? 'border-accent/55 bg-accent/12 text-accent'
                 : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground'
             )}
           >
-            {applyToHook ? 'Hook 开' : 'Hook 关'}
+            {bodyOnly ? 'Body 开' : 'Body 关'}
           </button>
         )}
         {filled && onClear && (
