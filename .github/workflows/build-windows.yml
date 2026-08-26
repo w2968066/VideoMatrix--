@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Release tag to upload the installer to"
         required: true
-        default: "v2.0.2"
+        default: "v2.1.0"
   push:
     tags:
       - "v*"
