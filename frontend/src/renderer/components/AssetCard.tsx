@@ -69,11 +69,13 @@ interface AssetCardProps {
   pickAction?: string
   secondaryAction?: string
   onSecondaryAction?: () => void
+  enabled?: boolean
+  onEnabledChange?: (enabled: boolean) => void
   bodyOnly?: boolean
   onBodyOnlyChange?: (enabled: boolean) => void
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, bodyOnly, onBodyOnlyChange }: AssetCardProps) {
+export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, enabled, onEnabledChange, bodyOnly, onBodyOnlyChange }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -132,6 +134,23 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
             className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
           >
             {secondaryAction}
+          </button>
+        )}
+        {enabled !== undefined && onEnabledChange && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => onEnabledChange(!enabled)}
+            title={enabled ? '字幕已开启，点击关闭' : '字幕已关闭，点击开启'}
+            className={cn(
+              'h-7 w-[44px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors',
+              enabled
+                ? 'border-accent/55 bg-accent/12 text-accent'
+                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground'
+            )}
+          >
+            {enabled ? '已开启' : '已关闭'}
           </button>
         )}
         {bodyOnly !== undefined && onBodyOnlyChange && (

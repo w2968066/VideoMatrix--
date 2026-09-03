@@ -240,6 +240,9 @@ export default function SinglePage() {
       addToast(addedCount > 0
         ? `已加入 ${addedCount} 个 Body 文件夹，共 ${appended.length} 个`
         : '所选 Body 文件夹已存在', addedCount > 0 ? 'success' : 'info')
+    } else if (key === 'srt_dir') {
+      setConfig({ srt_dir: selectedPaths[0], enable_srt: true })
+      addToast('字幕目录已选择并自动开启', 'success')
     } else {
       setConfig({ [key]: selectedPaths[0] } as any)
     }
@@ -454,10 +457,18 @@ export default function SinglePage() {
                   bodyOnly={!config.apply_voice_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_voice_to_hook: !v })}
                   onBrowse={() => browse('voice_dir')}       onClear={() => setConfig({ voice_dir: '' })} />
                 <AssetCard kind="srt"       label="字幕"      value={config.srt_dir || ''}
-                  onChange={(v) => setConfig({ srt_dir: v })}
+                  onChange={(v) => setConfig({ srt_dir: v, enable_srt: Boolean(v.trim()) })}
                   onOpen={() => openConfiguredPath(config.srt_dir || '')}
+                  enabled={config.enable_srt}
+                  onEnabledChange={(enabled) => {
+                    if (enabled && !config.srt_dir?.trim()) {
+                      addToast('请先选择字幕目录', 'warning')
+                      return
+                    }
+                    setConfig({ enable_srt: enabled })
+                  }}
                   bodyOnly={!config.apply_srt_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_srt_to_hook: !v })}
-                  onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '' })} />
+                  onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '', enable_srt: false })} />
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
                   onOpen={() => openConfiguredPath(config.watermark_path || '', true)}
@@ -543,10 +554,6 @@ export default function SinglePage() {
                 <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
                 <div className="flex items-center gap-4 pl-2">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <Checkbox checked={config.enable_srt} onCheckedChange={(v) => setConfig({ enable_srt: v as boolean })} />
-                    <span className="text-[11px] text-foreground/85">字幕</span>
-                  </label>
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox checked={config.enable_gpu} onCheckedChange={(v) => setConfig({ enable_gpu: v as boolean })} />
                     <span className="text-[11px] text-foreground/85">GPU</span>

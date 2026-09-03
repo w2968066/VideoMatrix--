@@ -211,6 +211,13 @@ class VideoMatrixCore:
         t_total = t_hook + body_duration
         bgm_duration = t_total if cfg.get('apply_bgm_to_hook', True) else body_duration
 
+        if cfg.get('enable_srt'):
+            srt_dir = str(cfg.get('srt_dir') or '').strip()
+            if not srt_dir or not os.path.isdir(srt_dir):
+                return False, "字幕已开启，但字幕目录不存在或未设置。"
+            if not self._scan_files(srt_dir, ('.srt',)):
+                return False, "字幕已开启，但字幕目录中没有找到 SRT 文件。"
+
         hook_files = self._scan_files(cfg['hook_dir'], ('.mp4', '.mov'))
         body_files = []
         for bd in cfg['body_dirs']:
@@ -349,13 +356,16 @@ class VideoMatrixCore:
             voice_clip = random.choice(self.voice_pool) if self.voice_pool else None
 
         temp_srt_path_safe = None
-        if cfg.get('enable_srt') and cfg.get('srt_dir') and os.path.exists(cfg['srt_dir']):
+        if cfg.get('enable_srt'):
             srt_on_hook = cfg.get('apply_srt_to_hook', True)
             temp_srt_path_safe = self.process_srt(
                 cfg['srt_dir'],
                 t_total if srt_on_hook else body_duration,
                 0.0 if srt_on_hook else t_hook,
             )
+            if not temp_srt_path_safe:
+                self.log(f"    [{self.task_name}] 字幕处理失败：SRT 无有效时间轴或编码无法读取。")
+                return (False, None, None) if return_result else False
 
         vol_orig = cfg['vol_orig'] / 100.0
         hook_volume_value = cfg.get('vol_hook_orig')
