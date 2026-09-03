@@ -264,13 +264,14 @@ function resolveDialogDefaultPath(rawPath?: string): string | undefined {
 }
 
 // IPC 处理器
-ipcMain.handle('dialog:openDirectory', async (_, defaultPath?: string) => {
+ipcMain.handle('dialog:openDirectory', async (_, defaultPath?: string, multi = false) => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
+    properties: multi ? ['openDirectory', 'multiSelections'] : ['openDirectory'],
     defaultPath: resolveDialogDefaultPath(defaultPath),
   })
-  return result.canceled ? null : result.filePaths[0]
+  if (result.canceled) return null
+  return multi ? result.filePaths : result.filePaths[0]
 })
 
 ipcMain.handle('dialog:openFile', async (_, filters, defaultPath?: string) => {

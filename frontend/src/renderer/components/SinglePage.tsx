@@ -217,13 +217,32 @@ export default function SinglePage() {
     const currentPath = key === 'body_dirs'
       ? config.body_dirs.join(';')
       : String(config[key as keyof typeof config] || '')
-    const selectedPath = await window.electronAPI.openDirectory(
-      browseStartDirectory(key, currentPath, isFilePath(currentPath))
+    const selected = await window.electronAPI.openDirectory(
+      browseStartDirectory(key, currentPath, isFilePath(currentPath)),
+      multi,
     )
-    if (!selectedPath) return
-    rememberBrowseDirectory(key, selectedPath)
-    if (key === 'body_dirs') setConfig({ body_dirs: multi ? [...config.body_dirs, selectedPath] : [selectedPath] })
-    else setConfig({ [key]: selectedPath } as any)
+    if (!selected) return
+    const selectedPaths = Array.isArray(selected) ? selected : [selected]
+    if (selectedPaths.length === 0) return
+    rememberBrowseDirectory(key, selectedPaths.at(-1)!)
+    if (key === 'body_dirs') {
+      const seen = new Set(config.body_dirs.map((item) => item.toLocaleLowerCase()))
+      const appended = [...config.body_dirs]
+      let addedCount = 0
+      selectedPaths.forEach((selectedPath) => {
+        const normalized = selectedPath.toLocaleLowerCase()
+        if (seen.has(normalized)) return
+        seen.add(normalized)
+        appended.push(selectedPath)
+        addedCount += 1
+      })
+      setConfig({ body_dirs: appended })
+      addToast(addedCount > 0
+        ? `已加入 ${addedCount} 个 Body 文件夹，共 ${appended.length} 个`
+        : '所选 Body 文件夹已存在', addedCount > 0 ? 'success' : 'info')
+    } else {
+      setConfig({ [key]: selectedPaths[0] } as any)
+    }
   }
 
   const browseFile = async (key: string) => {
@@ -419,7 +438,7 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ hook_dir: v })}
                   onOpen={() => openConfiguredPath(config.hook_dir)}
                   onBrowse={() => browse('hook_dir')}        onClear={() => setConfig({ hook_dir: '' })} />
-                <AssetCard kind="body"      label="Body 后段" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count}
+                <AssetCard kind="body"      label="Body 后段" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count} pickAction="追加"
                   onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
                   onOpen={() => openConfiguredPath(config.body_dirs.join('; '))}
                   onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
