@@ -16,10 +16,19 @@
 
 | 平台 | 文件 |
 | --- | --- |
-| Windows | `VideoMatrix.Setup.2.1.0.exe` |
-| macOS | `VideoMatrix.Setup.2.1.0-mac.dmg` |
+| Windows | `VideoMatrix.Setup.2.1.1.exe` |
+| macOS | `VideoMatrix.Setup.2.1.1-mac.dmg` |
 
 安装包已内置后端服务和 FFmpeg / FFprobe。Windows 用户直接安装即可，不需要单独安装 Python 或配置环境变量。
+
+## v2.1.1 更新公告（2026-09-03）
+
+### Body 多目录选择
+
+- Body 按钮改为“追加”，明确表示新目录不会覆盖已有目录。
+- 支持在系统目录选择器中一次选择多个 Body 文件夹。
+- 支持重复点击“追加”分批加入文件夹，并自动忽略重复目录。
+- 每次选择后提示本次新增数量和 Body 目录总数。
 
 ## v2.1.0 更新公告（2026-08-26）
 
