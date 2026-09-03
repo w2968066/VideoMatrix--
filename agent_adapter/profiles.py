@@ -32,6 +32,7 @@ BASE_CONFIG: dict[str, Any] = {
     "apply_srt_to_hook": True,
     "apply_watermark_to_hook": True,
     "enable_srt": False,
+    "subtitle_y_percent": 92,
     "enable_gpu": True,
     "concurrent_tasks": 3,
     "enable_variants": False,

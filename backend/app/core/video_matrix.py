@@ -18,6 +18,7 @@ from .ffmpeg import (
 
 MEDIA_CACHE_VERSION = 2
 DURATION_EPSILON = 0.001
+ASS_PLAY_RES_Y = 288
 
 APP_STATE_DIR = os.path.join(
     os.environ.get('APPDATA') or os.path.expanduser('~'),
@@ -38,6 +39,23 @@ def slice_count(usable_duration: float, clip_duration: float, step: float) -> in
         return int(math.floor((usable_duration - clip_duration) / step)) + 1
     actual_duration = usable_duration + MEDIA_END_SAFETY_MARGIN
     return 1 if actual_duration + DURATION_EPSILON >= clip_duration else 0
+
+
+def build_subtitle_filter(srt_path_safe: str, y_percent: float = 92.0) -> str:
+    """Build a libass subtitle filter with a resolution-independent vertical anchor."""
+    y = max(8.0, min(92.0, float(y_percent)))
+    if abs(y - 50.0) < 0.5:
+        alignment, margin_v = 5, 0
+    elif y < 50.0:
+        alignment = 8
+        margin_v = round(ASS_PLAY_RES_Y * y / 100.0)
+    else:
+        alignment = 2
+        margin_v = round(ASS_PLAY_RES_Y * (100.0 - y) / 100.0)
+    return (
+        f"subtitles='{srt_path_safe}':"
+        f"force_style='Alignment={alignment},MarginV={margin_v}'"
+    )
 
 
 class SharedMediaCache:
@@ -439,7 +457,11 @@ class VideoMatrixCore:
 
         current_v = "[vout_base]"
         if temp_srt_path_safe:
-            filter_complex += f"{current_v}subtitles='{temp_srt_path_safe}'[v_sub]; "
+            subtitle_filter = build_subtitle_filter(
+                temp_srt_path_safe,
+                cfg.get('subtitle_y_percent', 92.0),
+            )
+            filter_complex += f"{current_v}{subtitle_filter}[v_sub]; "
             current_v = "[v_sub]"
         if has_watermark:
             watermark_offset = 0.0 if cfg.get('apply_watermark_to_hook', True) else t_hook

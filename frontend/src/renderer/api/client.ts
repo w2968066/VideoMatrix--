@@ -69,6 +69,7 @@ export interface VideoConfig {
   apply_srt_to_hook: boolean
   apply_watermark_to_hook: boolean
   enable_srt: boolean
+  subtitle_y_percent: number
   enable_gpu: boolean
   concurrent_tasks?: string | number
   enable_variants: boolean

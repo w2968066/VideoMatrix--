@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { api, TaskStatus } from '../api/client'
 import { Checkbox } from './ui/checkbox'
+import { Slider } from './ui/slider'
 import { AssetCard } from './AssetCard'
 
 const RESOLUTION_PRESETS = [
@@ -25,6 +26,12 @@ const VARIANT_STRENGTH_INFO = {
 } as const
 
 const LAST_BROWSE_DIRS_KEY = 'vm-last-browse-dirs'
+
+const SUBTITLE_POSITION_PRESETS = [
+  { label: '顶部', value: 12 },
+  { label: '中央', value: 50 },
+  { label: '底部', value: 88 },
+] as const
 
 function readLastBrowseDirs(): Record<string, string> {
   try {
@@ -168,6 +175,7 @@ export default function SinglePage() {
   }, [tasks, addToast, appendLog])
 
   const running = tasks.filter(t => t.status === 'running').length
+  const subtitleYPercent = Math.max(8, Math.min(92, Number(config.subtitle_y_percent) || 92))
   const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
@@ -469,6 +477,41 @@ export default function SinglePage() {
                   }}
                   bodyOnly={!config.apply_srt_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_srt_to_hook: !v })}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '', enable_srt: false })} />
+                {config.enable_srt && (
+                  <div className="flex h-8 items-center gap-2 rounded-[5px] border border-accent/20 bg-accent/[0.035] px-2.5">
+                    <span className="w-[72px] shrink-0 text-[10px] text-foreground/80">字幕位置</span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {SUBTITLE_POSITION_PRESETS.map((preset) => {
+                        const active = Math.abs(subtitleYPercent - preset.value) < 0.5
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => setConfig({ subtitle_y_percent: preset.value })}
+                            className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
+                              active
+                                ? 'border-accent bg-accent text-background'
+                                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <span className="shrink-0 text-[9px] text-muted-foreground">上</span>
+                    <Slider
+                      value={[subtitleYPercent]}
+                      min={8}
+                      max={92}
+                      step={1}
+                      onValueChange={([value]) => setConfig({ subtitle_y_percent: value })}
+                      className="min-w-[100px] flex-1"
+                    />
+                    <span className="shrink-0 text-[9px] text-muted-foreground">下</span>
+                    <span className="w-8 shrink-0 text-right font-mono text-[10px] text-accent">{subtitleYPercent}%</span>
+                  </div>
+                )}
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"
                   onChange={(v) => setConfig({ watermark_path: v })}
                   onOpen={() => openConfiguredPath(config.watermark_path || '', true)}

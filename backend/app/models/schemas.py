@@ -37,6 +37,7 @@ class VideoConfig(BaseModel):
     apply_watermark_to_hook: bool = Field(default=True, description="水印是否作用于Hook")
     
     enable_srt: bool = Field(default=False, description="是否启用硬字幕")
+    subtitle_y_percent: float = Field(default=92.0, ge=8.0, le=92.0, description="字幕垂直位置百分比")
     enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
     concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 

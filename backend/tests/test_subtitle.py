@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.core.video_matrix import SharedMediaCache, VideoMatrixCore
+from app.core.video_matrix import SharedMediaCache, VideoMatrixCore, build_subtitle_filter
 
 
 def config(srt_dir: str, enabled: bool = True) -> dict:
@@ -21,6 +21,20 @@ def config(srt_dir: str, enabled: bool = True) -> dict:
 
 
 class SubtitleTests(unittest.TestCase):
+    def test_subtitle_position_uses_top_center_and_bottom_alignment(self):
+        self.assertEqual(
+            build_subtitle_filter("subtitle.srt", 12),
+            "subtitles='subtitle.srt':force_style='Alignment=8,MarginV=35'",
+        )
+        self.assertEqual(
+            build_subtitle_filter("subtitle.srt", 50),
+            "subtitles='subtitle.srt':force_style='Alignment=5,MarginV=0'",
+        )
+        self.assertEqual(
+            build_subtitle_filter("subtitle.srt", 88),
+            "subtitles='subtitle.srt':force_style='Alignment=2,MarginV=35'",
+        )
+
     def test_preflight_rejects_enabled_subtitles_without_directory(self):
         core = VideoMatrixCore(config(""), lambda _message: None, SharedMediaCache())
 

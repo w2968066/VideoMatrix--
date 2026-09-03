@@ -15,7 +15,7 @@ const PREPARE_FIELDS = new Set([
   'target_count', 'hook_r', 'body_r', 'bgm_r', 'resolution', 'fps', 'bitrate',
   'vol_orig', 'vol_hook_orig', 'vol_bgm', 'vol_voice', 'apply_bgm_to_hook',
   'apply_voice_to_hook', 'apply_srt_to_hook', 'apply_watermark_to_hook',
-  'enable_srt', 'enable_gpu', 'concurrent_tasks', 'enable_variants',
+  'enable_srt', 'subtitle_y_percent', 'enable_gpu', 'concurrent_tasks', 'enable_variants',
   'variant_strength', 'variant_hook', 'variant_body', 'variant_mirror',
   'variant_frame_mix', 'variant_seed',
 ])
