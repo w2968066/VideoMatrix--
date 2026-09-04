@@ -24,15 +24,23 @@ class SubtitleTests(unittest.TestCase):
     def test_subtitle_position_uses_top_center_and_bottom_alignment(self):
         self.assertEqual(
             build_subtitle_filter("subtitle.srt", 12),
-            "subtitles='subtitle.srt':force_style='Alignment=8,MarginV=35'",
+            "subtitles='subtitle.srt':force_style='FontName=Source Han Sans SC,FontSize=16,Alignment=8,MarginV=35'",
         )
         self.assertEqual(
             build_subtitle_filter("subtitle.srt", 50),
-            "subtitles='subtitle.srt':force_style='Alignment=5,MarginV=0'",
+            "subtitles='subtitle.srt':force_style='FontName=Source Han Sans SC,FontSize=16,Alignment=5,MarginV=0'",
         )
         self.assertEqual(
             build_subtitle_filter("subtitle.srt", 88),
-            "subtitles='subtitle.srt':force_style='Alignment=2,MarginV=35'",
+            "subtitles='subtitle.srt':force_style='FontName=Source Han Sans SC,FontSize=16,Alignment=2,MarginV=35'",
+        )
+
+    def test_subtitle_font_size_uses_video_height_percentage(self):
+        subtitle_filter = build_subtitle_filter("subtitle.srt", 88, 7.0, "C\\:/fonts")
+
+        self.assertEqual(
+            subtitle_filter,
+            "subtitles='subtitle.srt':fontsdir='C\\:/fonts':force_style='FontName=Source Han Sans SC,FontSize=20,Alignment=2,MarginV=35'",
         )
 
     def test_preflight_rejects_enabled_subtitles_without_directory(self):

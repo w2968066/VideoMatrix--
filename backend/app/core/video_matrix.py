@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 import random
 import json
@@ -19,6 +20,8 @@ from .ffmpeg import (
 MEDIA_CACHE_VERSION = 2
 DURATION_EPSILON = 0.001
 ASS_PLAY_RES_Y = 288
+SOURCE_HAN_FONT_NAME = 'Source Han Sans SC'
+SOURCE_HAN_FONT_FILE = 'SourceHanSansSC-Regular.otf'
 
 APP_STATE_DIR = os.path.join(
     os.environ.get('APPDATA') or os.path.expanduser('~'),
@@ -41,9 +44,26 @@ def slice_count(usable_duration: float, clip_duration: float, step: float) -> in
     return 1 if actual_duration + DURATION_EPSILON >= clip_duration else 0
 
 
-def build_subtitle_filter(srt_path_safe: str, y_percent: float = 92.0) -> str:
+def bundled_font_dir_safe() -> Optional[str]:
+    if getattr(sys, 'frozen', False):
+        font_dir = os.path.join(getattr(sys, '_MEIPASS', ''), 'fonts')
+    else:
+        backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        font_dir = os.path.join(backend_dir, 'assets', 'fonts', 'files')
+    if not os.path.isfile(os.path.join(font_dir, SOURCE_HAN_FONT_FILE)):
+        return None
+    return font_dir.replace('\\', '/').replace(':', '\\:').replace("'", "'\\''")
+
+
+def build_subtitle_filter(
+    srt_path_safe: str,
+    y_percent: float = 92.0,
+    font_size_percent: float = 5.6,
+    fonts_dir_safe: Optional[str] = None,
+) -> str:
     """Build a libass subtitle filter with a resolution-independent vertical anchor."""
     y = max(8.0, min(92.0, float(y_percent)))
+    font_size = round(ASS_PLAY_RES_Y * max(3.0, min(9.0, float(font_size_percent))) / 100.0)
     if abs(y - 50.0) < 0.5:
         alignment, margin_v = 5, 0
     elif y < 50.0:
@@ -52,9 +72,11 @@ def build_subtitle_filter(srt_path_safe: str, y_percent: float = 92.0) -> str:
     else:
         alignment = 2
         margin_v = round(ASS_PLAY_RES_Y * (100.0 - y) / 100.0)
+    fonts_dir_option = f":fontsdir='{fonts_dir_safe}'" if fonts_dir_safe else ""
     return (
-        f"subtitles='{srt_path_safe}':"
-        f"force_style='Alignment={alignment},MarginV={margin_v}'"
+        f"subtitles='{srt_path_safe}'{fonts_dir_option}:"
+        f"force_style='FontName={SOURCE_HAN_FONT_NAME},FontSize={font_size},"
+        f"Alignment={alignment},MarginV={margin_v}'"
     )
 
 
@@ -460,6 +482,8 @@ class VideoMatrixCore:
             subtitle_filter = build_subtitle_filter(
                 temp_srt_path_safe,
                 cfg.get('subtitle_y_percent', 92.0),
+                cfg.get('subtitle_font_size_percent', 5.6),
+                bundled_font_dir_safe(),
             )
             filter_complex += f"{current_v}{subtitle_filter}[v_sub]; "
             current_v = "[v_sub]"

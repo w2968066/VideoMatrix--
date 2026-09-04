@@ -22,6 +22,10 @@ block_cipher = None
 
 BACKEND_DIR = Path(os.path.abspath(SPECPATH))
 FFMPEG_DIR = BACKEND_DIR / 'ffmpeg'
+FONT_ASSET_DIR = BACKEND_DIR / 'assets' / 'fonts'
+FONT_FILE = FONT_ASSET_DIR / 'files' / 'SourceHanSansSC-Regular.otf'
+FONT_LICENSE = FONT_ASSET_DIR / 'SourceHanSans-LICENSE.txt'
+FONT_README = FONT_ASSET_DIR / 'README.md'
 
 # Collect ffmpeg / ffprobe regardless of which platform we are building on.
 # Each entry is (source_path_on_disk, target_subdir_inside_bundle).
@@ -30,6 +34,13 @@ for name in ('ffmpeg', 'ffmpeg.exe', 'ffprobe', 'ffprobe.exe'):
     candidate = FFMPEG_DIR / name
     if candidate.exists():
         binaries.append((str(candidate), '.'))
+
+datas = []
+if FONT_FILE.exists():
+    datas.append((str(FONT_FILE), 'fonts'))
+for notice in (FONT_LICENSE, FONT_README):
+    if notice.exists():
+        datas.append((str(notice), 'licenses/source-han-sans'))
 
 # Hidden imports — uvicorn dynamically loads these and PyInstaller's static
 # analysis would otherwise miss them.
@@ -63,7 +74,7 @@ a = Analysis(
     ['run_backend.py'],
     pathex=[str(BACKEND_DIR)],
     binaries=binaries,
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

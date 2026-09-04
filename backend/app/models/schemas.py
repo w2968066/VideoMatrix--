@@ -38,6 +38,7 @@ class VideoConfig(BaseModel):
     
     enable_srt: bool = Field(default=False, description="是否启用硬字幕")
     subtitle_y_percent: float = Field(default=92.0, ge=8.0, le=92.0, description="字幕垂直位置百分比")
+    subtitle_font_size_percent: float = Field(default=5.6, ge=3.0, le=9.0, description="字幕字号占画面高度百分比")
     enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
     concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 

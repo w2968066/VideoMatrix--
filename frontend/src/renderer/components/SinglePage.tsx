@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { api, TaskStatus } from '../api/client'
 import { Checkbox } from './ui/checkbox'
 import { Slider } from './ui/slider'
+import { SubtitlePreview } from './SubtitlePreview'
 import { AssetCard } from './AssetCard'
 
 const RESOLUTION_PRESETS = [
@@ -31,6 +32,12 @@ const SUBTITLE_POSITION_PRESETS = [
   { label: '顶部', value: 12 },
   { label: '中央', value: 50 },
   { label: '底部', value: 88 },
+] as const
+
+const SUBTITLE_FONT_SIZE_PRESETS = [
+  { label: '小', value: 4.4 },
+  { label: '标准', value: 5.6 },
+  { label: '大', value: 7.0 },
 ] as const
 
 function readLastBrowseDirs(): Record<string, string> {
@@ -176,6 +183,7 @@ export default function SinglePage() {
 
   const running = tasks.filter(t => t.status === 'running').length
   const subtitleYPercent = Math.max(8, Math.min(92, Number(config.subtitle_y_percent) || 92))
+  const subtitleFontSizePercent = Math.max(3, Math.min(9, Number(config.subtitle_font_size_percent) || 5.6))
   const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
@@ -478,38 +486,78 @@ export default function SinglePage() {
                   bodyOnly={!config.apply_srt_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_srt_to_hook: !v })}
                   onBrowse={() => browse('srt_dir')}         onClear={() => setConfig({ srt_dir: '', enable_srt: false })} />
                 {config.enable_srt && (
-                  <div className="flex h-8 items-center gap-2 rounded-[5px] border border-accent/20 bg-accent/[0.035] px-2.5">
-                    <span className="w-[72px] shrink-0 text-[10px] text-foreground/80">字幕位置</span>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {SUBTITLE_POSITION_PRESETS.map((preset) => {
-                        const active = Math.abs(subtitleYPercent - preset.value) < 0.5
-                        return (
-                          <button
-                            key={preset.label}
-                            type="button"
-                            onClick={() => setConfig({ subtitle_y_percent: preset.value })}
-                            className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
-                              active
-                                ? 'border-accent bg-accent text-background'
-                                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
-                            }`}
-                          >
-                            {preset.label}
-                          </button>
-                        )
-                      })}
+                  <div className="space-y-1 rounded-[5px] border border-accent/20 bg-accent/[0.035] px-2.5 py-1">
+                    <div className="flex h-7 items-center gap-2">
+                      <span className="w-[72px] shrink-0 text-[10px] text-foreground/80">字幕位置</span>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {SUBTITLE_POSITION_PRESETS.map((preset) => {
+                          const active = Math.abs(subtitleYPercent - preset.value) < 0.05
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => setConfig({ subtitle_y_percent: preset.value })}
+                              className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
+                                active
+                                  ? 'border-accent bg-accent text-background'
+                                  : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <span className="shrink-0 text-[9px] text-muted-foreground">上</span>
+                      <Slider
+                        ariaLabel="字幕垂直位置"
+                        dragPreview={<SubtitlePreview resolution={config.resolution} yPercent={subtitleYPercent} fontSizePercent={subtitleFontSizePercent} />}
+                        value={[subtitleYPercent]}
+                        min={8}
+                        max={92}
+                        step={0.1}
+                        onValueChange={([value]) => setConfig({ subtitle_y_percent: value })}
+                        className="min-w-[100px] flex-1"
+                      />
+                      <span className="shrink-0 text-[9px] text-muted-foreground">下</span>
+                      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-accent">{subtitleYPercent.toFixed(1)}%</span>
                     </div>
-                    <span className="shrink-0 text-[9px] text-muted-foreground">上</span>
-                    <Slider
-                      value={[subtitleYPercent]}
-                      min={8}
-                      max={92}
-                      step={1}
-                      onValueChange={([value]) => setConfig({ subtitle_y_percent: value })}
-                      className="min-w-[100px] flex-1"
-                    />
-                    <span className="shrink-0 text-[9px] text-muted-foreground">下</span>
-                    <span className="w-8 shrink-0 text-right font-mono text-[10px] text-accent">{subtitleYPercent}%</span>
+                    <div className="flex h-7 items-center gap-2">
+                      <span className="w-[72px] shrink-0 text-[10px] text-foreground/80">字体 / 字号</span>
+                      <span title="内置 Adobe Source Han Sans SC Regular" className="h-6 shrink-0 rounded-[4px] border border-accent/30 bg-accent/[0.06] px-2 text-[9px] leading-6 text-accent">
+                        思源黑体
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {SUBTITLE_FONT_SIZE_PRESETS.map((preset) => {
+                          const active = Math.abs(subtitleFontSizePercent - preset.value) < 0.05
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => setConfig({ subtitle_font_size_percent: preset.value })}
+                              className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
+                                active
+                                  ? 'border-accent bg-accent text-background'
+                                  : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <Slider
+                        ariaLabel="字幕字号"
+                        dragPreview={<SubtitlePreview resolution={config.resolution} yPercent={subtitleYPercent} fontSizePercent={subtitleFontSizePercent} />}
+                        value={[subtitleFontSizePercent]}
+                        min={3}
+                        max={9}
+                        step={0.01}
+                        onValueChange={([value]) => setConfig({ subtitle_font_size_percent: value })}
+                        className="min-w-[90px] flex-1"
+                      />
+                      <span className="w-9 shrink-0 text-right font-mono text-[10px] text-accent">{subtitleFontSizePercent.toFixed(1)}%</span>
+                    </div>
                   </div>
                 )}
                 <AssetCard kind="watermark" label="水印"      value={config.watermark_path || ''} pickAction="选择"

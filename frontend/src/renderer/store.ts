@@ -63,6 +63,7 @@ const defaultConfig: VideoConfig = {
   apply_watermark_to_hook: true,
   enable_srt: false,
   subtitle_y_percent: 92,
+  subtitle_font_size_percent: 5.6,
   enable_gpu: true,
   concurrent_tasks: 3,
   enable_variants: false,
