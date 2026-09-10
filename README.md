@@ -16,8 +16,8 @@
 
 | 平台 | 文件 |
 | --- | --- |
-| Windows | `VideoMatrix.Setup.2.1.4.exe` |
-| macOS | `VideoMatrix.Setup.2.1.4-mac.dmg` |
+| Windows | `VideoMatrix.Setup.2.2.0.exe` |
+| macOS | `VideoMatrix.Setup.2.2.0-mac.dmg` |
 
 安装包已内置后端服务和 FFmpeg / FFprobe。Windows 用户直接安装即可，不需要单独安装 Python 或配置环境变量。
 
@@ -40,6 +40,19 @@
 4. 启动渲染，字幕按当前设置烧录到成品；SRT 原文件不变。
 
 > 悬浮框是位置和大小示意，不是成品预览。真实字幕长度、换行及字体排版以实际输出为准。
+
+## v2.2.0 更新公告（2026-09-11）
+
+### Body 分组与随机首帧
+
+- Body 支持普通 / 分组两种模式；分组模式最多 4 组，每组独立选择文件夹、设置抽取数量和单片段时长。
+- 输出顺序固定为 `Hook → Body 1 → Body 2 → Body 3 → Body 4`，每组内部随机抽取。
+- 界面自动显示包含 Hook 的总片段数和预计总时长；切换普通模式时原有 Body 设置保留。
+- 新增独立“随机首帧”开关：从每条成品自身随机抽帧并随机缩放裁切。
+- 支持“替换首帧”和“插入一帧”两种方式。替换不改变时长；插入会增加一帧并同步后移音频。
+- 随机首帧与成品变换互不依赖，处理失败会保留原成片。
+
+详细行为见 [`docs/body-groups-and-cover.md`](docs/body-groups-and-cover.md)。
 
 ## v2.1.3 更新公告（2026-09-03）
 

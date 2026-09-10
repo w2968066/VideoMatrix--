@@ -38,6 +38,8 @@ const defaultConfig: VideoConfig = {
   task_name: 'Task',
   hook_dir: '',
   body_dirs: [],
+  body_mode: 'normal',
+  body_groups: Array.from({ length: 4 }, (_, index) => ({ enabled: index === 0, folder: '', clip_count: 1, clip_duration: 3 })),
   bgm_dir: '',
   voice_dir: '',
   srt_dir: '',
@@ -73,6 +75,8 @@ const defaultConfig: VideoConfig = {
   variant_mirror: false,
   variant_frame_mix: true,
   variant_seed: null,
+  enable_random_cover: false,
+  random_cover_mode: 'replace',
 }
 
 function loadSavedConfig(): VideoConfig {
@@ -83,6 +87,13 @@ function loadSavedConfig(): VideoConfig {
     return {
       ...defaultConfig,
       ...saved,
+      body_mode: saved.body_mode === 'grouped' ? 'grouped' : 'normal',
+      body_groups: Array.from({ length: 4 }, (_, index) => ({
+        ...defaultConfig.body_groups[index],
+        ...(Array.isArray(saved.body_groups) ? saved.body_groups[index] : {}),
+      })),
+      enable_random_cover: Boolean(saved.enable_random_cover),
+      random_cover_mode: saved.random_cover_mode === 'insert' ? 'insert' : 'replace',
       vol_hook_orig: saved.vol_hook_orig ?? saved.vol_orig ?? defaultConfig.vol_hook_orig,
       // V1 exposes a single final-output transformer, so legacy hidden scope/random
       // options must not silently alter the new behavior.

@@ -11,7 +11,7 @@ on:
       release_tag:
         description: "Release tag to upload the dmg to"
         required: true
-        default: "v2.1.4"
+        default: "v2.2.0"
   push:
     tags:
       - "v*"

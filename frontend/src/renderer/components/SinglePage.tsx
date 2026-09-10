@@ -105,6 +105,44 @@ function ParamRow({ label, value, suffix, onChange, placeholder }: {
   )
 }
 
+function ReadonlyParamRow({ label, value, suffix }: { label: string; value: string | number; suffix?: string }) {
+  return (
+    <div className="flex items-center gap-2 h-7">
+      <span className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</span>
+      <span className="h-7 min-w-0 flex-1 rounded-[4px] border border-accent/20 bg-accent/[0.04] px-2.5 font-mono text-[11px] leading-7 text-accent">{value}</span>
+      {suffix && <span className="w-9 shrink-0 text-[9px] text-muted-foreground">{suffix}</span>}
+    </div>
+  )
+}
+
+function BodyGroupRow({ index, group, onChange, onBrowse, onOpen }: {
+  index: number
+  group: { enabled: boolean; folder: string; clip_count: string | number; clip_duration: string | number }
+  onChange: (patch: Partial<typeof group>) => void
+  onBrowse: () => void
+  onOpen: () => void
+}) {
+  return (
+    <div className={`grid grid-cols-[42px_minmax(0,1fr)_54px_54px_44px] items-center gap-1 rounded-[5px] border px-1.5 py-1 ${group.enabled ? 'border-accent/28 bg-accent/[0.035]' : 'border-white/[0.07] bg-white/[0.012]'}`}>
+      <button type="button" role="switch" aria-checked={group.enabled} onClick={() => onChange({ enabled: !group.enabled })}
+        className={`h-6 rounded-[4px] border text-[9px] font-semibold ${group.enabled ? 'border-accent/55 bg-accent/12 text-accent' : 'border-white/[0.08] text-muted-foreground'}`}>
+        组 {index + 1}
+      </button>
+      <div className="flex min-w-0 items-center gap-1">
+        <input value={group.folder} onChange={(e) => onChange({ folder: e.target.value })} placeholder="Body 文件夹"
+          className="h-6 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2 font-mono text-[10px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70" />
+        <button type="button" onClick={onOpen} disabled={!group.folder} title="打开路径" className="h-6 w-6 shrink-0 rounded-[4px] border border-white/[0.08] text-[10px] text-muted-foreground hover:text-accent disabled:opacity-35">开</button>
+        <button type="button" onClick={onBrowse} className="h-6 shrink-0 rounded-[4px] border border-white/[0.08] px-1.5 text-[9px] text-foreground/85 hover:border-accent/50 hover:text-accent">浏览</button>
+      </div>
+      <input type="number" min="1" step="1" value={String(group.clip_count)} onChange={(e) => onChange({ clip_count: e.target.value })} inputMode="numeric" title="片段数（至少 1）" placeholder="片段"
+        className="h-6 min-w-0 rounded-[4px] border border-white/[0.10] bg-[#111318] px-1.5 text-center font-mono text-[10px] text-white outline-none focus:border-accent/70" />
+      <input type="number" min="0.5" step="0.1" value={String(group.clip_duration)} onChange={(e) => onChange({ clip_duration: e.target.value })} inputMode="decimal" title="每段时长（秒，至少 0.5）" placeholder="秒"
+        className="h-6 min-w-0 rounded-[4px] border border-white/[0.10] bg-[#111318] px-1.5 text-center font-mono text-[10px] text-white outline-none focus:border-accent/70" />
+      <span className="text-center text-[9px] text-muted-foreground">段 / 秒</span>
+    </div>
+  )
+}
+
 function getResolutionTag(value: string) {
   const normalized = value.toLowerCase().replace('*', 'x')
   const parts = normalized.split('x').map((v) => parseInt(v, 10))
@@ -115,6 +153,14 @@ function getResolutionTag(value: string) {
   if (pixels >= 1920 * 1080 * 0.9) return '1080P'
   if (pixels >= 1280 * 720 * 0.9) return '720P'
   return '标清'
+}
+
+function parseFps(value: string | number) {
+  const text = String(value).trim()
+  const fraction = text.split('/').map(Number)
+  if (fraction.length === 2 && fraction.every(Number.isFinite) && fraction[1] > 0) return fraction[0] / fraction[1]
+  const parsed = Number(text)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30
 }
 
 // ─── Task row ─────────────────────────────────────────────────────────────────
@@ -184,6 +230,10 @@ export default function SinglePage() {
   const running = tasks.filter(t => t.status === 'running').length
   const subtitleYPercent = Math.max(8, Math.min(92, Number(config.subtitle_y_percent) || 92))
   const subtitleFontSizePercent = Math.max(3, Math.min(9, Number(config.subtitle_font_size_percent) || 5.6))
+  const enabledBodyGroups = config.body_groups.filter((group) => group.enabled)
+  const groupedClipCount = 1 + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Math.floor(Number(group.clip_count) || 0)), 0)
+  const coverFrameDuration = config.enable_random_cover && config.random_cover_mode === 'insert' ? 1 / parseFps(config.fps) : 0
+  const groupedDuration = Math.max(0, Number(config.t_hook) || 0) + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Number(group.clip_count) || 0) * Math.max(0, Number(group.clip_duration) || 0), 0) + coverFrameDuration
   const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
@@ -218,6 +268,14 @@ export default function SinglePage() {
       return null
     }
     const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
+    if (config.body_mode === 'grouped') {
+      const missingFolder = enabledBodyGroups.some((group) => !group.folder.trim())
+      const invalidGroup = enabledBodyGroups.some((group) => !Number.isInteger(Number(group.clip_count)) || Number(group.clip_count) < 1 || Number(group.clip_duration) < 0.5)
+      if (enabledBodyGroups.length === 0 || missingFolder || invalidGroup) {
+        addToast('每个启用组需有文件夹、整数片段数和至少 0.5 秒时长', 'warning')
+        return null
+      }
+    }
     const parsedConcurrency = Number(config.concurrent_tasks)
     const concurrentTasks = Number.isFinite(parsedConcurrency) && parsedConcurrency >= 1
       ? Math.floor(parsedConcurrency)
@@ -225,7 +283,12 @@ export default function SinglePage() {
     if (concurrentTasks !== config.concurrent_tasks) {
       setConfig({ concurrent_tasks: concurrentTasks })
     }
-    return { ...config, body_dirs: bodyDirs, concurrent_tasks: concurrentTasks }
+    return {
+      ...config,
+      body_dirs: bodyDirs,
+      concurrent_tasks: concurrentTasks,
+      total_clips: config.body_mode === 'grouped' ? groupedClipCount : config.total_clips,
+    }
   }
 
   const browse = async (key: string, multi = false) => {
@@ -262,6 +325,20 @@ export default function SinglePage() {
     } else {
       setConfig({ [key]: selectedPaths[0] } as any)
     }
+  }
+
+  const updateBodyGroup = (index: number, patch: Partial<(typeof config.body_groups)[number]>) => {
+    setConfig({ body_groups: config.body_groups.map((group, groupIndex) => groupIndex === index ? { ...group, ...patch } : group) })
+  }
+
+  const browseBodyGroup = async (index: number) => {
+    if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
+    const group = config.body_groups[index]
+    const key = `body_group_${index}`
+    const selected = await window.electronAPI.openDirectory(browseStartDirectory(key, group.folder), false)
+    if (!selected || Array.isArray(selected)) return
+    rememberBrowseDirectory(key, selected)
+    updateBodyGroup(index, { folder: selected })
   }
 
   const browseFile = async (key: string) => {
@@ -435,7 +512,7 @@ export default function SinglePage() {
         <div className="flex-1 min-h-0 grid grid-cols-[minmax(660px,0.68fr)_minmax(360px,0.32fr)] gap-3">
 
           {/* ─── LEFT: configuration ─── */}
-          <div className="flex flex-col gap-2 min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-2 min-h-0 overflow-y-auto pr-1">
 
             {/* Sources — long path inputs */}
             <Group title="素材" action={(
@@ -457,10 +534,41 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ hook_dir: v })}
                   onOpen={() => openConfiguredPath(config.hook_dir)}
                   onBrowse={() => browse('hook_dir')}        onClear={() => setConfig({ hook_dir: '' })} />
-                <AssetCard kind="body"      label="Body 后段" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count} pickAction="追加"
-                  onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
-                  onOpen={() => openConfiguredPath(config.body_dirs.join('; '))}
-                  onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
+                <div className="space-y-1 rounded-[6px] border border-white/[0.07] bg-white/[0.012] p-1.5">
+                  <div className="flex items-center justify-between gap-2 px-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-foreground/85">Body 后段</span>
+                      <div className="flex items-center rounded-[4px] border border-white/[0.08] p-0.5">
+                        {(['normal', 'grouped'] as const).map((mode) => (
+                          <button key={mode} type="button" onClick={() => setConfig({ body_mode: mode })}
+                            className={`h-5 rounded-[3px] px-2 text-[9px] font-semibold transition-colors ${config.body_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground hover:text-accent'}`}>
+                            {mode === 'normal' ? '普通' : '分组'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {config.body_mode === 'grouped' && <span className="font-mono text-[9px] text-accent">共 {groupedClipCount} 段 · {groupedDuration.toFixed(coverFrameDuration ? 3 : 1)}s</span>}
+                  </div>
+                  {config.body_mode === 'normal' ? (
+                    <AssetCard kind="body" label="文件夹" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count} pickAction="追加"
+                      onChange={(v) => setConfig({ body_dirs: splitPathList(v) })}
+                      onOpen={() => openConfiguredPath(config.body_dirs.join('; '))}
+                      onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="grid grid-cols-[42px_minmax(0,1fr)_54px_54px_44px] gap-1 px-1.5 text-center text-[9px] text-muted-foreground">
+                        <span>开关</span><span>每组文件夹（按组顺序固定）</span><span>片段</span><span>时长</span><span />
+                      </div>
+                      {config.body_groups.map((group, index) => (
+                        <BodyGroupRow key={index} index={index} group={group}
+                          onChange={(patch) => updateBodyGroup(index, patch)}
+                          onBrowse={() => browseBodyGroup(index)}
+                          onOpen={() => openConfiguredPath(group.folder)} />
+                      ))}
+                      <p className="px-1 text-[9px] text-muted-foreground">各组内随机抽取，组与组按 1→4 顺序拼接。</p>
+                    </div>
+                  )}
+                </div>
                 <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required pickAction="目录"
                   onChange={(v) => setConfig({ bgm_dir: v })}
                   onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
@@ -578,8 +686,13 @@ export default function SinglePage() {
                 <Group title="参数">
                   <div className="space-y-1">
                     <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
-                    <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
-                    <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
+                    {config.body_mode === 'normal' ? <>
+                      <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
+                      <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
+                    </> : <>
+                      <ReadonlyParamRow label="总片段" value={groupedClipCount} suffix="含 Hook" />
+                      <ReadonlyParamRow label="总时长" value={groupedDuration.toFixed(coverFrameDuration ? 3 : 1)} suffix="s 含 Hook" />
+                    </>}
                     <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
                     <ParamRow label="并发" value={config.concurrent_tasks ?? 3} onChange={(v) => setParam('concurrent_tasks', v)} />
                   </div>
@@ -644,11 +757,26 @@ export default function SinglePage() {
                 </div>
                 <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
-                <div className="flex items-center gap-4 pl-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-2">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox checked={config.enable_gpu} onCheckedChange={(v) => setConfig({ enable_gpu: v as boolean })} />
                     <span className="text-[11px] text-foreground/85">GPU</span>
                   </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer" title="从成品随机抽帧并缩放裁切，可替换首帧或插入一帧；开启后会增加编码耗时。">
+                    <Checkbox checked={config.enable_random_cover} onCheckedChange={(v) => setConfig({ enable_random_cover: v as boolean })} />
+                    <span className="text-[11px] text-foreground/85">随机首帧</span>
+                  </label>
+                  {config.enable_random_cover && (
+                    <div className="flex items-center rounded-[4px] border border-white/[0.08] p-0.5">
+                      {([['replace', '替换首帧'], ['insert', '插入一帧']] as const).map(([mode, label]) => (
+                        <button key={mode} type="button" onClick={() => setConfig({ random_cover_mode: mode })}
+                          className={`h-5 rounded-[3px] px-1.5 text-[9px] font-semibold ${config.random_cover_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground hover:text-accent'}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <span className="text-[9px] text-muted-foreground">随机抽帧裁切；插入会延长 1 帧，音频同步后移</span>
                 </div>
               </div>
             </Group>

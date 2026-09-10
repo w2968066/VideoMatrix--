@@ -66,6 +66,8 @@ hiddenimports = [
     'app.core.ffmpeg',
     'app.core.video_matrix',
     'app.core.video_variant',
+    'app.core.timeline',
+    'app.core.video_cover',
     'app.services.task_service',
     'app.models.schemas',
 ]

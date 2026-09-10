@@ -11,18 +11,21 @@ from typing import Dict, List, Optional, Callable
 
 from ..core.video_matrix import VideoMatrixCore, SharedMediaCache
 from ..core.video_variant import VideoVariantProcessor, derive_variant_seed
+from ..core.timeline import apply_timeline_totals
+from ..core.video_cover import RandomCoverProcessor
 from ..models.schemas import VideoConfig, TaskStatus
 
 
 class TaskService:
-    def __init__(self):
-        self.shared_cache = SharedMediaCache()
+    def __init__(self, shared_cache: Optional[SharedMediaCache] = None):
+        self.shared_cache = shared_cache or SharedMediaCache()
         self.tasks: Dict[str, TaskStatus] = {}
         self.active_cores: Dict[str, List[VideoMatrixCore]] = {}
         self.cores_lock = threading.Lock()
         self.log_buffers: Dict[str, List[str]] = {}
         self._log_lock = threading.Lock()
         self.variant_processor = VideoVariantProcessor()
+        self.cover_processor = RandomCoverProcessor()
         self.variant_processes: Dict[str, set[subprocess.Popen]] = {}
 
     def _create_log_callback(self, task_id: str) -> Callable:
@@ -42,8 +45,15 @@ class TaskService:
             body_dirs = [p.strip() for p in body_dirs.split(';') if p.strip()]
         normalized['body_dirs'] = body_dirs
 
+        if normalized.get('body_mode', 'normal') == 'grouped':
+            normalized['body_groups'] = list(normalized.get('body_groups') or [])
+        apply_timeline_totals(normalized)
+
         if normalized.get('enable_variants') and normalized.get('variant_seed') is None:
             normalized['variant_seed'] = random.SystemRandom().randrange(0, 2**63)
+        if normalized.get('enable_random_cover'):
+            # Cover randomness is intentionally independent from optional variant settings.
+            normalized['_cover_seed'] = random.SystemRandom().randrange(0, 2**63)
 
         if not normalized.get('base_out_dir', '').strip():
             h_dir = normalized.get('hook_dir', '').rstrip('/\\')
@@ -131,6 +141,8 @@ class TaskService:
                 task_cfg['task_name'] = t['name']
                 task_cfg['hook_dir'] = t['hook_dir']
                 task_cfg['body_dirs'] = t['body_dirs']
+                # Group folders are global configuration, not inferred from Hook subfolders.
+                task_cfg['body_groups'] = config.get('body_groups') or []
                 task_cfg['out_dir'] = t['out']
                 os.makedirs(task_cfg['out_dir'], exist_ok=True)
 
@@ -228,6 +240,26 @@ class TaskService:
                 )
             else:
                 core.log(f"    [{core.task_name}] 成品变换警告：{error or '处理失败'}，已保留原成片。")
+        if result and output_path and core.config.get('enable_random_cover'):
+            cover_started = time.time()
+            seed = derive_variant_seed(
+                int(core.config.get('_cover_seed') or 0), core.task_name + ':cover', idx,
+            )
+            try:
+                ok, error, summary = self.cover_processor.process(
+                    output_path, core.config, seed,
+                    is_cancelled=lambda: status.status == "stopped" or not core.is_running,
+                    on_process=lambda process: self._track_variant_process(status.task_id, process),
+                )
+            except Exception as exc:
+                ok, error, summary = False, str(exc), None
+            elapsed = round((elapsed or 0) + time.time() - cover_started, 1)
+            if status.status == "stopped" or not core.is_running:
+                return False
+            if ok:
+                core.log(f"    [{core.task_name}] 随机封面完成（{summary['mode']}）：取样 {summary['sample_time']:.3f} 秒，zoom={summary['zoom']:.3f}")
+            else:
+                core.log(f"    [{core.task_name}] 随机封面警告：{error or '处理失败'}，已保留原成片。")
         if result and output_path and status.task_id in self.tasks:
             if output_path not in self.tasks[status.task_id].output_files:
                 self.tasks[status.task_id].output_files.append(output_path)
@@ -300,6 +332,7 @@ class TaskService:
             task_cfg['task_name'] = t['name']
             task_cfg['hook_dir'] = t['hook_dir']
             task_cfg['body_dirs'] = t['body_dirs']
+            task_cfg['body_groups'] = raw_config.get('body_groups') or []
             core = VideoMatrixCore(task_cfg, lambda _x: None, self.shared_cache)
             ok, msg = core.pre_flight_check()
             if ok:
@@ -326,6 +359,7 @@ class TaskService:
             test_cfg.update({
                 'hook_dir': tasks[0]['hook_dir'],
                 'body_dirs': tasks[0]['body_dirs'],
+                'body_groups': raw_config.get('body_groups') or [],
                 'out_dir': os.path.join(os.path.dirname(__file__), '../../../temp'),
                 'target_count': 2,
                 'task_name': 'Test'

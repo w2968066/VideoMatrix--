@@ -10,7 +10,7 @@ let isQuitting = false
 
 const PREPARE_ARG = '--videomatrix-prepare='
 const PREPARE_FIELDS = new Set([
-  'task_name', 'hook_dir', 'body_dirs', 'bgm_dir', 'voice_dir', 'srt_dir',
+  'task_name', 'hook_dir', 'body_dirs', 'body_mode', 'body_groups', 'bgm_dir', 'voice_dir', 'srt_dir',
   'watermark_path', 'base_out_dir', 't_hook', 't_body', 'total_clips',
   'target_count', 'hook_r', 'body_r', 'bgm_r', 'resolution', 'fps', 'bitrate',
   'vol_orig', 'vol_hook_orig', 'vol_bgm', 'vol_voice', 'apply_bgm_to_hook',
@@ -19,6 +19,8 @@ const PREPARE_FIELDS = new Set([
   'concurrent_tasks', 'enable_variants',
   'variant_strength', 'variant_hook', 'variant_body', 'variant_mirror',
   'variant_frame_mix', 'variant_seed',
+  'enable_random_cover',
+  'random_cover_mode',
 ])
 
 interface PrepareRequest {

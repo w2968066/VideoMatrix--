@@ -7,6 +7,8 @@ class VideoConfig(BaseModel):
     task_name: str = Field(default="Task", description="任务名称")
     hook_dir: str = Field(..., description="首段素材目录")
     body_dirs: List[str] = Field(default_factory=list, description="后段素材目录列表")
+    body_mode: Literal["normal", "grouped"] = Field(default="normal", description="后段拼接模式")
+    body_groups: List["BodyGroup"] = Field(default_factory=list, max_length=4, description="按顺序拼接的 Body 分组")
     bgm_dir: str = Field(..., description="BGM 目录或带音轨的视频文件")
     voice_dir: Optional[str] = Field(default=None, description="配音目录")
     srt_dir: Optional[str] = Field(default=None, description="字幕目录")
@@ -49,6 +51,15 @@ class VideoConfig(BaseModel):
     variant_mirror: bool = Field(default=False, description="允许随机镜像")
     variant_frame_mix: bool = Field(default=True, description="允许相邻帧低权重混合")
     variant_seed: Optional[int] = Field(default=None, ge=0, description="任务级随机种子")
+    enable_random_cover: bool = Field(default=False, description="随机替换成片首帧")
+    random_cover_mode: Literal["replace", "insert"] = Field(default="replace", description="随机封面首帧处理方式")
+
+
+class BodyGroup(BaseModel):
+    enabled: bool = Field(default=True, description="是否使用此组")
+    folder: str = Field(default="", description="此组素材目录")
+    clip_count: int = Field(default=1, ge=1, description="此组抽取片段数")
+    clip_duration: float = Field(default=3.0, ge=0.5, description="此组片段时长(秒)")
 
 
 class TaskStatus(BaseModel):

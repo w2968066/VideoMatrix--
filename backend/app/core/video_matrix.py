@@ -16,6 +16,7 @@ from .ffmpeg import (
     FFMPEG, MEDIA_END_SAFETY_MARGIN, probe_media, extract_media_info, extract_audio_duration,
     render_video
 )
+from .timeline import apply_timeline_totals, body_segment_specs
 
 MEDIA_CACHE_VERSION = 2
 DURATION_EPSILON = 0.001
@@ -82,11 +83,13 @@ def build_subtitle_filter(
 
 class SharedMediaCache:
     """全局线程安全缓存管理"""
-    def __init__(self):
+    def __init__(self, state_dir: Optional[str] = None):
         self.media_cache: Dict[str, dict] = {}
         self.usage_history: set = set()
-        self.media_cache_file = state_path('media_cache.json')
-        self.usage_history_file = state_path('usage_history.json')
+        root = state_dir or APP_STATE_DIR
+        os.makedirs(root, exist_ok=True)
+        self.media_cache_file = os.path.join(root, 'media_cache.json')
+        self.usage_history_file = os.path.join(root, 'usage_history.json')
         self.lock = threading.Lock()
         self.load_state()
 
@@ -133,6 +136,7 @@ class VideoMatrixCore:
         self.task_name = config.get('task_name', 'SingleTask')
         self.hook_pool: List[dict] = []
         self.body_pool: List[dict] = []
+        self.body_group_pools: List[List[dict]] = []
         self.bgm_pool: List[dict] = []
         self.voice_pool: List[dict] = []
         self.n_total = 0
@@ -240,15 +244,16 @@ class VideoMatrixCore:
     def pre_flight_check(self) -> Tuple[bool, str]:
         self.hook_pool.clear()
         self.body_pool.clear()
+        self.body_group_pools.clear()
         self.bgm_pool.clear()
         self.voice_pool.clear()
 
         cfg = self.config
         t_hook = cfg['t_hook']
-        t_body = cfg['t_body']
-        total_clips = cfg['total_clips']
-        body_duration = t_body * (total_clips - 1)
-        t_total = t_hook + body_duration
+        apply_timeline_totals(cfg)
+        body_specs = body_segment_specs(cfg)
+        body_duration = cfg['body_duration']
+        t_total = cfg['total_duration']
         bgm_duration = t_total if cfg.get('apply_bgm_to_hook', True) else body_duration
 
         if cfg.get('enable_srt'):
@@ -259,9 +264,18 @@ class VideoMatrixCore:
                 return False, "字幕已开启，但字幕目录中没有找到 SRT 文件。"
 
         hook_files = self._scan_files(cfg['hook_dir'], ('.mp4', '.mov'))
+        grouped_body = cfg.get('body_mode', 'normal') == 'grouped'
+        if grouped_body and not body_specs:
+            return False, f"库 [{self.task_name}] Body 分组模式至少需要启用一个分组。"
         body_files = []
-        for bd in cfg['body_dirs']:
-            body_files.extend(self._scan_files(bd, ('.mp4', '.mov')))
+        group_files: List[List[str]] = []
+        if grouped_body:
+            for spec in body_specs:
+                files = self._scan_files(spec['folder'], ('.mp4', '.mov'))
+                group_files.append(files)
+                body_files.extend(files)
+        else:
+            body_files = [f for bd in cfg['body_dirs'] for f in self._scan_files(bd, ('.mp4', '.mov'))]
         bgm_files = self._scan_files(
             cfg['bgm_dir'],
             ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm')
@@ -299,12 +313,31 @@ class VideoMatrixCore:
                         'duration': t_hook, 'has_audio': has_audio, 'id': hook_id
                     })
 
-        for f in body_files:
-            dur, has_audio, _ = probe_results[f]
-            step = max(t_body * (1 - cfg['body_r']), 0.1)
-            n = slice_count(dur, t_body, step)
-            for i in range(n):
-                self.body_pool.append({'file': f, 'start': i * step, 'duration': t_body, 'has_audio': has_audio})
+        if grouped_body:
+            for spec, files in zip(body_specs, group_files):
+                if not spec['folder'] or not os.path.isdir(spec['folder']):
+                    return False, f"库 [{self.task_name}] Body 分组 {spec['group_index']} 目录不存在或未设置。"
+                pool: List[dict] = []
+                duration = spec['clip_duration']
+                for f in files:
+                    dur, has_audio, _ = probe_results[f]
+                    step = max(duration * (1 - cfg['body_r']), 0.1)
+                    for i in range(slice_count(dur, duration, step)):
+                        pool.append({'file': f, 'start': i * step, 'duration': duration, 'has_audio': has_audio})
+                if len(pool) < spec['clip_count']:
+                    return False, (
+                        f"库 [{self.task_name}] Body 分组 {spec['group_index']} 素材不足："
+                        f"需要 {spec['clip_count']} 段，可用 {len(pool)} 段。"
+                    )
+                self.body_group_pools.append(pool)
+        else:
+            t_body = cfg['t_body']
+            for f in body_files:
+                dur, has_audio, _ = probe_results[f]
+                step = max(t_body * (1 - cfg['body_r']), 0.1)
+                n = slice_count(dur, t_body, step)
+                for i in range(n):
+                    self.body_pool.append({'file': f, 'start': i * step, 'duration': t_body, 'has_audio': has_audio})
 
         if not self.hook_pool:
             if not hook_files:
@@ -333,7 +366,7 @@ class VideoMatrixCore:
                 self.log(f"[{self.task_name}] 提示: 首段仅剩 {self.n_total} 个片段，已自动下调目标产量。")
                 cfg['target_count'] = self.n_total
 
-        if len(self.body_pool) < total_clips - 1:
+        if not grouped_body and len(self.body_pool) < cfg['total_clips'] - 1:
             return False, f"库 [{self.task_name}] 后段素材不足拼凑 1 个视频。"
 
         for f in bgm_files:
@@ -376,8 +409,10 @@ class VideoMatrixCore:
         start_time = time.time()
         cfg = self.config
         t_hook = cfg['t_hook']
-        body_duration = cfg['t_body'] * (cfg['total_clips'] - 1)
-        t_total = t_hook + body_duration
+        apply_timeline_totals(cfg)
+        body_specs = body_segment_specs(cfg)
+        body_duration = cfg['body_duration']
+        t_total = cfg['total_duration']
 
         with self.core_lock:
             if not self.hook_pool:
@@ -387,7 +422,11 @@ class VideoMatrixCore:
             else:
                 hook_clip = self.hook_pool.pop()
 
-            if len(self.body_pool) >= (cfg['total_clips'] - 1):
+            if cfg.get('body_mode', 'normal') == 'grouped':
+                body_clips = []
+                for spec, pool in zip(body_specs, self.body_group_pools):
+                    body_clips.extend(random.sample(pool, spec['clip_count']))
+            elif len(self.body_pool) >= (cfg['total_clips'] - 1):
                 body_clips = random.sample(self.body_pool, cfg['total_clips'] - 1)
             else:
                 body_clips = random.choices(self.body_pool, k=cfg['total_clips'] - 1)

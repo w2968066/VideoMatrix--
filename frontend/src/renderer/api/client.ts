@@ -41,10 +41,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export interface BodyGroup {
+  enabled: boolean
+  folder: string
+  clip_count: string | number
+  clip_duration: string | number
+}
+
 export interface VideoConfig {
   task_name: string
   hook_dir: string
   body_dirs: string[]
+  body_mode: 'normal' | 'grouped'
+  body_groups: BodyGroup[]
   bgm_dir: string
   voice_dir?: string
   srt_dir?: string
@@ -80,6 +89,52 @@ export interface VideoConfig {
   variant_mirror: boolean
   variant_frame_mix: boolean
   variant_seed?: number | null
+  enable_random_cover: boolean
+  random_cover_mode: 'replace' | 'insert'
+}
+
+const NUMERIC_CONFIG_FIELDS = [
+  't_hook', 't_body', 'total_clips', 'target_count', 'hook_r', 'body_r', 'bgm_r',
+  'fps', 'vol_orig', 'vol_hook_orig', 'vol_bgm', 'vol_voice', 'subtitle_y_percent',
+  'subtitle_font_size_percent', 'concurrent_tasks', 'variant_seed',
+] as const
+
+function numberIfValid(value: unknown) {
+  if (typeof value === 'number' || value === null) return value
+  if (typeof value !== 'string' || !value.trim()) return value
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : value
+}
+
+export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
+  const normalized = { ...config } as VideoConfig
+  NUMERIC_CONFIG_FIELDS.forEach((key) => {
+    ;(normalized as any)[key] = numberIfValid(config[key])
+  })
+  normalized.body_mode = config.body_mode === 'grouped' ? 'grouped' : 'normal'
+  const normalizedGroups = (config.body_groups || []).slice(0, 4).map((group) => {
+    const safeGroup = group || {} as BodyGroup
+    const clipCount = Number(safeGroup.clip_count)
+    const clipDuration = Number(safeGroup.clip_duration)
+    return {
+      enabled: Boolean(safeGroup.enabled),
+      folder: String(safeGroup.folder || '').trim(),
+      // Disabled rows stay at their position but must still satisfy Pydantic.
+      clip_count: Number.isInteger(clipCount) && clipCount >= 1 ? clipCount : 1,
+      clip_duration: Number.isFinite(clipDuration) && clipDuration >= 0.5 ? clipDuration : 3,
+    }
+  })
+  normalized.body_groups = normalized.body_mode === 'grouped' ? normalizedGroups : []
+  if (normalized.body_mode === 'grouped') {
+    const groupClipCount = normalizedGroups.filter((group) => group.enabled)
+      .reduce((total, group) => total + group.clip_count, 0)
+    // These normal-mode inputs are hidden in grouped mode, so never submit stale invalid values.
+    normalized.t_body = 3
+    normalized.total_clips = Math.max(2, 1 + groupClipCount)
+  }
+  normalized.enable_random_cover = Boolean(config.enable_random_cover)
+  normalized.random_cover_mode = config.random_cover_mode === 'insert' ? 'insert' : 'replace'
+  return normalized
 }
 
 export interface TaskStatus {
@@ -103,7 +158,7 @@ export const api = {
   createTask: (config: VideoConfig) =>
     request<{ task_id: string; message: string }>('/tasks', {
       method: 'POST',
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({ config: normalizeConfigForRequest(config) }),
     }),
 
   listTasks: () => request<TaskStatus[]>('/tasks'),
@@ -145,13 +200,13 @@ export const api = {
   benchmark: (config: VideoConfig) =>
     request<any>('/benchmark', {
       method: 'POST',
-      body: JSON.stringify(config),
+      body: JSON.stringify(normalizeConfigForRequest(config)),
     }),
 
   preflight: (config: VideoConfig) =>
     request<any>('/preflight', {
       method: 'POST',
-      body: JSON.stringify(config),
+      body: JSON.stringify(normalizeConfigForRequest(config)),
     }),
 
   clearHistory: () =>

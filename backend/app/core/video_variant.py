@@ -14,6 +14,7 @@ from fractions import Fraction
 from typing import Callable, Optional
 
 from .ffmpeg import FFMPEG, probe_media
+from .timeline import apply_timeline_totals, body_segment_specs
 
 
 VARIANT_VERSION = "creative-variant-v1"
@@ -79,15 +80,19 @@ def build_variant_plan(config: dict, seed: int) -> list[SegmentVariant]:
     limits = STRENGTHS.get(strength, STRENGTHS["balanced"])
     rng = random.Random(seed)
     t_hook = float(config["t_hook"])
-    t_body = float(config["t_body"])
-    total_clips = int(config["total_clips"])
+    normalized = dict(config)
+    apply_timeline_totals(normalized)
+    body_durations = [
+        spec["clip_duration"]
+        for spec in body_segment_specs(normalized)
+        for _ in range(spec["clip_count"])
+    ]
     width, height = parse_resolution(config)
     aspect = height / width
     plan: list[SegmentVariant] = []
     start = 0.0
 
-    for index in range(total_clips):
-        duration = t_hook if index == 0 else t_body
+    for index, duration in enumerate([t_hook] + body_durations):
         enabled = bool(config.get("variant_hook", True) if index == 0 else config.get("variant_body", True))
         mirror = enabled and bool(config.get("variant_mirror", True)) and rng.random() < limits["mirror_chance"]
         signed = lambda span: rng.uniform(-span, span)
