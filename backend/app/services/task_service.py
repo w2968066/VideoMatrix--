@@ -214,6 +214,7 @@ class TaskService:
         if status.status == "stopped" or not core.is_running:
             return False
         result, output_path, elapsed = core.render_single_video(idx, return_result=True)
+        output_config = getattr(core, 'output_configs', {}).pop(idx, core.config)
         if result and output_path and core.config.get('enable_variants'):
             variant_started = time.time()
             seed = derive_variant_seed(
@@ -222,7 +223,7 @@ class TaskService:
             try:
                 ok, error, summary = self.variant_processor.process(
                     output_path,
-                    core.config,
+                    output_config,
                     seed,
                     is_cancelled=lambda: status.status == "stopped" or not core.is_running,
                     on_process=lambda process: self._track_variant_process(status.task_id, process),

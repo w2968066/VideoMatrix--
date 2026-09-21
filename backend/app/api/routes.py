@@ -108,6 +108,7 @@ def probe_file(file_path: str):
     return ProbeResult(
         file_path=file_path,
         duration=dur,
+        source_duration=extract_media_info(info, file_path, safety_margin=0)[0],
         has_audio=has_audio,
         width=width,
         height=height,

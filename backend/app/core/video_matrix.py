@@ -135,6 +135,8 @@ class VideoMatrixCore:
 
         self.task_name = config.get('task_name', 'SingleTask')
         self.hook_pool: List[dict] = []
+        self.hook_cycle: List[dict] = []
+        self.output_configs: Dict[int, dict] = {}
         self.body_pool: List[dict] = []
         self.body_group_pools: List[List[dict]] = []
         self.bgm_pool: List[dict] = []
@@ -243,6 +245,7 @@ class VideoMatrixCore:
 
     def pre_flight_check(self) -> Tuple[bool, str]:
         self.hook_pool.clear()
+        self.hook_cycle.clear()
         self.body_pool.clear()
         self.body_group_pools.clear()
         self.bgm_pool.clear()
@@ -297,6 +300,12 @@ class VideoMatrixCore:
         hook_candidate_count = 0
         for f in hook_files:
             dur, has_audio, _ = probe_results[f]
+            if cfg.get('hook_full_duration'):
+                full_duration = dur + MEDIA_END_SAFETY_MARGIN if dur > 0 else extract_media_info(probe_media(f) or {}, f, safety_margin=0)[0]
+                if full_duration > 0:
+                    self.hook_pool.append({'file': f, 'start': 0.0, 'duration': full_duration, 'has_audio': has_audio})
+                    hook_candidate_count += 1
+                continue
             step = max(t_hook * (1 - cfg['hook_r']), 0.1)
             n = slice_count(dur, t_hook, step)
             if n <= 0:
@@ -356,7 +365,7 @@ class VideoMatrixCore:
                 "但对应首段切片已全部使用；请清理记录后重试。"
             )
 
-        if cfg['hook_r'] >= 0.99:
+        if cfg.get('hook_full_duration') or cfg['hook_r'] >= 0.99:
             self.n_total = "无限"
         else:
             self.n_total = len(self.hook_pool)
@@ -369,6 +378,8 @@ class VideoMatrixCore:
         if not grouped_body and len(self.body_pool) < cfg['total_clips'] - 1:
             return False, f"库 [{self.task_name}] 后段素材不足拼凑 1 个视频。"
 
+        if cfg.get('hook_full_duration') and cfg.get('apply_bgm_to_hook', True):
+            bgm_duration = max(clip['duration'] for clip in self.hook_pool) + body_duration
         for f in bgm_files:
             _, has_audio, audio_dur = probe_results[f]
             if has_audio:
@@ -394,7 +405,8 @@ class VideoMatrixCore:
             ) if not enabled
         ]
         if protected:
-            self.log(f"[{self.task_name}] 成品 Hook 保护：{', '.join(protected)} 从 {t_hook:g} 秒后开始生效。")
+            offset_label = '实际 Hook 结束' if cfg.get('hook_full_duration') else f'{t_hook:g} 秒'
+            self.log(f"[{self.task_name}] 成品 Hook 保护：{', '.join(protected)} 从 {offset_label}后开始生效。")
 
         random.shuffle(self.hook_pool)
         return True, "预检通过"
@@ -407,17 +419,19 @@ class VideoMatrixCore:
         self.log(f"  [{now_str_start}] [{self.task_name}] 正在拼装 视频 {task_idx:03d} ...")
 
         start_time = time.time()
-        cfg = self.config
-        t_hook = cfg['t_hook']
-        apply_timeline_totals(cfg)
+        cfg = dict(self.config)
         body_specs = body_segment_specs(cfg)
-        body_duration = cfg['body_duration']
-        t_total = cfg['total_duration']
 
         with self.core_lock:
             if not self.hook_pool:
                 return (False, None, None) if return_result else False
-            if cfg['hook_r'] >= 0.99:
+            if cfg.get('hook_full_duration'):
+                if not self.hook_cycle:
+                    self.hook_cycle = list(self.hook_pool)
+                    random.shuffle(self.hook_cycle)
+                hook_clip = self.hook_cycle.pop()
+                cfg['t_hook'] = hook_clip['duration']
+            elif cfg['hook_r'] >= 0.99:
                 hook_clip = random.choice(self.hook_pool)
             else:
                 hook_clip = self.hook_pool.pop()
@@ -434,7 +448,14 @@ class VideoMatrixCore:
             bgm_clip = random.choice(self.bgm_pool)
             voice_clip = random.choice(self.voice_pool) if self.voice_pool else None
 
+        apply_timeline_totals(cfg)
+        t_hook = cfg['t_hook']
+        body_duration = cfg['body_duration']
+        t_total = cfg['total_duration']
+
         temp_srt_path_safe = None
+        with self.core_lock:
+            self.output_configs[task_idx] = cfg
         if cfg.get('enable_srt'):
             srt_on_hook = cfg.get('apply_srt_to_hook', True)
             temp_srt_path_safe = self.process_srt(

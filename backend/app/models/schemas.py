@@ -16,6 +16,7 @@ class VideoConfig(BaseModel):
     base_out_dir: str = Field(default="", description="输出父目录")
     
     t_hook: float = Field(default=3.0, ge=0.5, description="首段时长(秒)")
+    hook_full_duration: bool = Field(default=False, description="按原素材时长使用完整 Hook，随机轮换")
     t_body: float = Field(default=3.0, ge=0.5, description="后段片段时长(秒)")
     total_clips: int = Field(default=5, ge=2, description="每视频总片段数")
     target_count: int = Field(default=10, ge=1, description="目标生成数量")
@@ -80,6 +81,7 @@ class TaskStatus(BaseModel):
 class ProbeResult(BaseModel):
     file_path: str
     duration: float
+    source_duration: float = 0
     has_audio: bool
     width: Optional[int] = None
     height: Optional[int] = None

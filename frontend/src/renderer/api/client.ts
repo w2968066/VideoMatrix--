@@ -60,6 +60,7 @@ export interface VideoConfig {
   watermark_path?: string
   base_out_dir: string
   t_hook: string | number
+  hook_full_duration: boolean
   t_body: string | number
   total_clips: string | number
   target_count: string | number
@@ -133,6 +134,11 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
     normalized.total_clips = Math.max(2, 1 + groupClipCount)
   }
   normalized.enable_random_cover = Boolean(config.enable_random_cover)
+  normalized.hook_full_duration = Boolean(config.hook_full_duration)
+  if (normalized.hook_full_duration) {
+    normalized.t_hook = 3 // Hidden fixed-duration input must not invalidate this mode.
+    normalized.hook_r = 1
+  }
   normalized.random_cover_mode = config.random_cover_mode === 'insert' ? 'insert' : 'replace'
   return normalized
 }

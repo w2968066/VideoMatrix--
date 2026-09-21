@@ -10,6 +10,7 @@ let isQuitting = false
 
 const PREPARE_ARG = '--videomatrix-prepare='
 const PREPARE_FIELDS = new Set([
+  'hook_full_duration',
   'task_name', 'hook_dir', 'body_dirs', 'body_mode', 'body_groups', 'bgm_dir', 'voice_dir', 'srt_dir',
   'watermark_path', 'base_out_dir', 't_hook', 't_body', 'total_clips',
   'target_count', 'hook_r', 'body_r', 'bgm_r', 'resolution', 'fps', 'bitrate',
@@ -178,11 +179,11 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     width: 1280,
-    height: 900,
+    height: 1080,
     minWidth: 1280,
-    minHeight: 900,
+    minHeight: 1080,
     maxWidth: 1280,
-    maxHeight: 900,
+    maxHeight: 1080,
     resizable: false,
     maximizable: false,
     fullscreenable: false,

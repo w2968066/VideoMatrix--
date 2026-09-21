@@ -46,6 +46,7 @@ const defaultConfig: VideoConfig = {
   watermark_path: '',
   base_out_dir: '',
   t_hook: 3.0,
+  hook_full_duration: false,
   t_body: 3.0,
   total_clips: 5,
   target_count: 10,

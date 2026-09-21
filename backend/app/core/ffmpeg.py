@@ -63,7 +63,7 @@ def probe_media(file_path: str) -> Optional[dict]:
         return None
 
 
-def extract_media_info(info: dict, file_path: str) -> Tuple[float, bool, Optional[int], Optional[int], Optional[float]]:
+def extract_media_info(info: dict, file_path: str, safety_margin: float = MEDIA_END_SAFETY_MARGIN) -> Tuple[float, bool, Optional[int], Optional[int], Optional[float]]:
     """从 ffprobe JSON 中提取时长、是否有音频、宽高、帧率。"""
     dur = float(info.get('format', {}).get('duration', 0.0))
     has_audio = False
@@ -98,7 +98,7 @@ def extract_media_info(info: dict, file_path: str) -> Tuple[float, bool, Optiona
                 except ValueError:
                     pass
     
-    dur = max(0.0, dur - MEDIA_END_SAFETY_MARGIN)
+    dur = max(0.0, dur - safety_margin)
     return dur, has_audio, width, height, fps
 
 

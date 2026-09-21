@@ -70,7 +70,7 @@ function browseStartDirectory(key: string, currentPath: string, fileMode = false
 }
 
 // ─── Group ────────────────────────────────────────────────────────────────────
-function Group({ title, children, className = '', action }: { title: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {
+function Group({ title, children, className = '', action }: { title: React.ReactNode; children: React.ReactNode; className?: string; action?: React.ReactNode }) {
   return (
     <div className={className}>
       <div className="mb-1 flex h-4 items-center justify-between">
@@ -83,24 +83,94 @@ function Group({ title, children, className = '', action }: { title: string; chi
 }
 
 // ─── Text parameter row (compact) ─────────────────────────────────────────────
-function ParamRow({ label, value, suffix, onChange, placeholder }: {
+function ParamRow({ label, value, suffix, onChange, placeholder, disabled = false }: {
   label: string
   value: string | number
   suffix?: string
   placeholder?: string
+  disabled?: boolean
   onChange: (v: string) => void
 }) {
   return (
     <div className="flex items-center gap-2 h-7">
       <label className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</label>
       <input
+        disabled={disabled}
         value={String(value ?? '')}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode="decimal"
-        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70"
+        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70 disabled:opacity-40"
       />
       {suffix && <span className="w-7 shrink-0 text-[10px] text-muted-foreground">{suffix}</span>}
+    </div>
+  )
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  return open ? (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className="h-3.5 w-3.5">
+      <path d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.7" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" className="h-3.5 w-3.5">
+      <path d="m3 3 18 18" />
+      <path d="M10.6 5.2A10.7 10.7 0 0 1 12 5c6.1 0 9.5 7 9.5 7a17.4 17.4 0 0 1-3.1 3.8M6.1 6.1C3.8 8 2.5 12 2.5 12s3.4 7 9.5 7c1.4 0 2.6-.3 3.7-.8M9.9 9.9A3 3 0 0 0 14.1 14" />
+    </svg>
+  )
+}
+
+function OverlapRateHelp() {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const closeIfOutside = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeIfOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeIfOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative ml-1 inline-flex items-center normal-case tracking-normal">
+      <button type="button" aria-label="打开重叠率说明" aria-expanded={open} aria-controls="overlap-rate-help" onClick={() => setOpen((value) => !value)}
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-muted-foreground/55 text-[10px] font-semibold leading-none text-muted-foreground transition-colors hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent" title="重叠率说明">
+        ?
+      </button>
+      {open && (
+        <div id="overlap-rate-help" role="dialog" aria-label="重叠率说明" className="absolute left-0 top-full z-50 mt-2 w-64 rounded-[6px] border border-accent/35 bg-background p-3 text-left normal-case tracking-normal shadow-[0_14px_32px_-16px_rgba(0,0,0,0.85)]">
+          <p className="text-[11px] font-semibold text-foreground">原素材的裁切重叠率</p>
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">从同一份原素材连续取切片时，允许重复使用的时长占每个切片的比例。</p>
+          <div className="mt-2 space-y-3 rounded-[4px] border border-muted-foreground/20 px-2 py-2 text-[10px] leading-4">
+            <p className="text-muted-foreground">示例：每次裁切 10 秒，横轴为原素材时间 →</p>
+            {[
+              { label: '0%（填 0）：无重叠裁切', start: 10, end: 20, offset: '50%', detail: '裁切起点：0s → 10s；复用 0 秒' },
+              { label: '30%（填 0.3）：有重叠裁切', start: 7, end: 17, offset: '35%', detail: '裁切起点：0s → 7s；复用 7–10s，共 3 秒' },
+            ].map((example) => (
+              <div key={example.start} className="space-y-1">
+                <p className="font-semibold text-foreground">{example.label}</p>
+                <div className="relative space-y-1" aria-label={example.detail}>
+                  {example.start === 7 && <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-[35%] w-[15%] border-x border-dashed border-accent bg-accent/15" />}
+                  <div className="relative w-1/2 rounded-[3px] bg-muted px-1 py-0.5 text-center text-foreground">切片 A · 0–10s</div>
+                  <div className="relative w-1/2 rounded-[3px] bg-accent px-1 py-0.5 text-center text-background" style={{ marginLeft: example.offset }}>切片 B · {example.start}–{example.end}s</div>
+                </div>
+                <p className="text-muted-foreground">{example.detail}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] leading-4 text-muted-foreground">比例越高，裁切起点越密，可选切片越多，原素材复用越多。此参数控制素材裁切，不改变成片的拼接方式。</p>
+        </div>
+      )}
     </div>
   )
 }
@@ -201,6 +271,31 @@ export default function SinglePage() {
   const [benchmarkProgress, setBenchmarkProgress] = useState(0)
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [completionNotice, setCompletionNotice] = useState<string | null>(null)
+  const [contactVisible, setContactVisible] = useState(false)
+  const [hookRange, setHookRange] = useState<[number, number] | null>(null)
+  const [hookRangeError, setHookRangeError] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setHookRange(null)
+    setHookRangeError(false)
+    if (!config.hook_full_duration || !config.hook_dir) return
+    const timer = window.setTimeout(async () => {
+      try {
+        const scan = await api.scanDirectory(config.hook_dir)
+        const durations: number[] = []
+        // Probe in bounded batches so large folders do not flood the service.
+        for (let i = 0; i < scan.files.length && !cancelled; i += 4) {
+          const results = await Promise.all(scan.files.slice(i, i + 4).map(file => api.probeFile(file).catch(() => null)))
+          for (const result of results) if (result?.source_duration > 0) durations.push(result.source_duration)
+        }
+        if (!cancelled) {
+          setHookRange(durations.length ? [Math.min(...durations), Math.max(...durations)] : null)
+          setHookRangeError(!durations.length)
+        }
+      } catch { if (!cancelled) setHookRangeError(true) }
+    }, 400)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [config.hook_full_duration, config.hook_dir])
   const logRef = useRef<HTMLDivElement>(null)
   const taskStatusRef = useRef<Record<string, string>>({})
 
@@ -234,6 +329,13 @@ export default function SinglePage() {
   const groupedClipCount = 1 + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Math.floor(Number(group.clip_count) || 0)), 0)
   const coverFrameDuration = config.enable_random_cover && config.random_cover_mode === 'insert' ? 1 / parseFps(config.fps) : 0
   const groupedDuration = Math.max(0, Number(config.t_hook) || 0) + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Number(group.clip_count) || 0) * Math.max(0, Number(group.clip_duration) || 0), 0) + coverFrameDuration
+  const bodySeconds = config.body_mode === 'grouped'
+    ? enabledBodyGroups.reduce((sum, group) => sum + Number(group.clip_count || 0) * Number(group.clip_duration || 0), 0)
+    : Math.max(0, Number(config.total_clips) - 1) * Number(config.t_body || 0)
+  const durationLabel = config.hook_full_duration
+    ? hookRange ? hookRange.map(value => (value + bodySeconds + coverFrameDuration).toFixed(coverFrameDuration ? 3 : 1)).join('–') + 's'
+      : !config.hook_dir ? '请选择 Hook 目录' : hookRangeError ? '时长读取失败' : '读取时长中…'
+    : groupedDuration.toFixed(coverFrameDuration ? 3 : 1) + 's'
   const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
@@ -485,9 +587,16 @@ export default function SinglePage() {
         <div className="flex items-center justify-between gap-4 pb-1.5 mb-1.5 border-b border-white/[0.055] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
-            <span className="shrink-0 rounded-[4px] border border-accent/45 bg-accent px-3 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
-              VX：18667026883
-            </span>
+            <div className="flex shrink-0 items-center gap-1.5 rounded-[4px] border border-accent/45 bg-accent px-2.5 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
+              <span>联系我</span>
+              <button type="button" aria-label={contactVisible ? '隐藏微信联系方式' : '显示微信联系方式'} aria-pressed={contactVisible}
+                onClick={() => setContactVisible((visible) => !visible)}
+                className="-my-1 -mr-1 flex h-6 w-6 items-center justify-center rounded-[3px] text-background/80 transition-colors hover:bg-background/15 hover:text-background focus:outline-none focus-visible:ring-1 focus-visible:ring-background"
+                title={contactVisible ? '隐藏联系方式' : '显示联系方式'}>
+                <EyeIcon open={contactVisible} />
+              </button>
+              {contactVisible && <span className="border-l border-background/35 pl-1.5 font-mono">VX：18667026883</span>}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button
@@ -547,7 +656,7 @@ export default function SinglePage() {
                         ))}
                       </div>
                     </div>
-                    {config.body_mode === 'grouped' && <span className="font-mono text-[9px] text-accent">共 {groupedClipCount} 段 · {groupedDuration.toFixed(coverFrameDuration ? 3 : 1)}s</span>}
+                    {config.body_mode === 'grouped' && <span className="font-mono text-[9px] text-accent">共 {groupedClipCount} 段 · {durationLabel}</span>}
                   </div>
                   {config.body_mode === 'normal' ? (
                     <AssetCard kind="body" label="文件夹" value={config.body_dirs.join('; ')} count={scannedFiles.body?.count} pickAction="追加"
@@ -685,22 +794,29 @@ export default function SinglePage() {
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 min-w-0">
                 <Group title="参数">
                   <div className="space-y-1">
-                    <ParamRow label="首段" value={config.t_hook} suffix="s" onChange={(v) => setParam('t_hook', v)} />
+                    <div className="flex items-center gap-1">
+                      <div className="min-w-0 flex-1"><ParamRow label="首段" value={config.t_hook} disabled={config.hook_full_duration} onChange={(v) => setParam('t_hook', v)} /></div>
+                      <span className="text-[10px] text-muted-foreground">s</span>
+                      <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[9px] text-foreground/85" title="完整使用每个 Hook；随机轮换，用完一轮再重复">
+                        <Checkbox checked={config.hook_full_duration} onCheckedChange={value => setConfig({ hook_full_duration: value === true })} />按原素材时长
+                      </label>
+                    </div>
+                    {config.hook_full_duration && config.body_mode === 'normal' && <p className="text-[9px] text-accent">预计成片 {durationLabel}</p>}
                     {config.body_mode === 'normal' ? <>
                       <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
                       <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
                     </> : <>
                       <ReadonlyParamRow label="总片段" value={groupedClipCount} suffix="含 Hook" />
-                      <ReadonlyParamRow label="总时长" value={groupedDuration.toFixed(coverFrameDuration ? 3 : 1)} suffix="s 含 Hook" />
+                      <ReadonlyParamRow label="总时长" value={durationLabel} />
                     </>}
                     <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
                     <ParamRow label="并发" value={config.concurrent_tasks ?? 3} onChange={(v) => setParam('concurrent_tasks', v)} />
                   </div>
                 </Group>
 
-                <Group title="重叠率 / 音量">
+                <Group title={<span className="inline-flex items-center">重叠率 / 音量 <OverlapRateHelp /></span>}>
                   <div className="space-y-1">
-                    <ParamRow label="Hook" value={config.hook_r} onChange={(v) => setParam('hook_r', v)} />
+                    <ParamRow label="Hook" value={config.hook_full_duration ? 1 : config.hook_r} disabled={config.hook_full_duration} onChange={(v) => setParam('hook_r', v)} />
                     <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
                     <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
                     <ParamRow label="Hook声" value={config.vol_hook_orig} suffix="%" onChange={(v) => setParam('vol_hook_orig', v)} />
