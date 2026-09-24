@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Release tag to upload the installer to"
         required: true
-        default: "v2.3.0"
+        default: "v2.3.2"
   push:
     tags:
       - "v*"
@@ -30,7 +30,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install backend deps + PyInstaller
         shell: pwsh
@@ -38,25 +38,39 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller pytest
 
       # ── Bundle ffmpeg next to the backend so PyInstaller sweeps it in ────
       - name: Download FFmpeg static build
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
-          Expand-Archive -LiteralPath ffmpeg.zip -DestinationPath ffmpeg-extracted -Force
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-full_build.7z"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
+          7z x ffmpeg.7z -offmpeg-extracted -y
+          if ($LASTEXITCODE -ne 0) { throw "FFmpeg extraction failed" }
           $bin = Get-ChildItem -Path ffmpeg-extracted -Recurse -Filter ffmpeg.exe | Select-Object -First 1 -ExpandProperty DirectoryName
           New-Item -ItemType Directory -Force -Path backend/ffmpeg | Out-Null
           Copy-Item "$bin\ffmpeg.exe"  backend/ffmpeg/
           Copy-Item "$bin\ffprobe.exe" backend/ffmpeg/
+          if ((Get-FileHash backend/ffmpeg/ffmpeg.exe).Hash -ne "09948D4CDD0650DA6FF5A87577469F2A218DC2615AE379F8F734D24C49DE0F73") { throw "FFmpeg differs from verified build" }
+          if ((Get-FileHash backend/ffmpeg/ffprobe.exe).Hash -ne "A6618E99BB58869DED3C6F37B53AA1A8D701C3591DBB7B5B317D47369C112BE2") { throw "FFprobe differs from verified build" }
+
+      - name: Test backend regressions
+        working-directory: backend
+        run: python -m pytest tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py -q
 
       # ── Backend → single .exe (ffmpeg + uvicorn + fastapi bundled) ───────
       - name: Build backend binary
         shell: pwsh
         working-directory: backend
         run: pyinstaller --clean videomatrix-backend.spec
+
+      - name: Verify packaged backend identity and shutdown
+        shell: pwsh
+        working-directory: backend
+        run: |
+          $env:VIDEOMATRIX_TEST_BINARY = (Resolve-Path dist/videomatrix-backend.exe).Path
+          python -m pytest tests/test_runtime_startup.py -q
 
       # ── Node toolchain ───────────────────────────────────────────────────
       - name: Set up Node
@@ -72,7 +86,10 @@ jobs:
 
       - name: Build renderer / main / preload
         working-directory: frontend
-        run: npm run build
+        run: |
+          node --test tests/runtime.test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
 
       # ── Frontend installer (NSIS) — pulls backend exe in via extraResources
       - name: Package Electron app

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { TaskStatus, VideoConfig } from './api/client'
 import { ToastItem } from './components/animation/Toast'
+import { collectTaskLogs } from './taskLogs'
 
 type Page = 'dashboard' | 'sources' | 'mix' | 'queue' | 'output'
 
@@ -17,6 +18,7 @@ interface AppState {
   setCurrentTaskId: (id: string | null) => void
 
   logs: string[]
+  logCursors: Record<string, number>
   appendLog: (line: string) => void
   clearLogs: () => void
 
@@ -124,10 +126,14 @@ export const useStore = create<AppState>((set) => ({
 
   tasks: [],
   currentTaskId: null,
-  setTasks: (tasks) => set({ tasks }),
+  setTasks: (tasks) => set(state => {
+    const { cursors, lines } = collectTaskLogs(tasks, state.logCursors)
+    return { tasks, logCursors: cursors, logs: [...state.logs, ...lines] }
+  }),
   setCurrentTaskId: (id) => set({ currentTaskId: id }),
 
   logs: [],
+  logCursors: {},
   appendLog: (line) => set((state) => ({ logs: [...state.logs, line] })),
   clearLogs: () => set({ logs: [] }),
 

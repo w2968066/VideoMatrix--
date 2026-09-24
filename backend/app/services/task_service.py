@@ -6,6 +6,8 @@ import threading
 import concurrent.futures
 import random
 import subprocess
+import shutil
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Callable
 
@@ -13,6 +15,7 @@ from ..core.video_matrix import VideoMatrixCore, SharedMediaCache
 from ..core.video_variant import VideoVariantProcessor, derive_variant_seed
 from ..core.timeline import apply_timeline_totals
 from ..core.video_cover import RandomCoverProcessor
+from ..core.hardware import HardwareSession
 from ..models.schemas import VideoConfig, TaskStatus
 
 
@@ -126,6 +129,16 @@ class TaskService:
         status.updated_at = datetime.now()
 
         try:
+            # One verified hardware session is shared by all SKU cores and all
+            # post-processing stages. This prevents each stage from probing or
+            # oversubscribing the same encoder independently.
+            hardware_session = HardwareSession(
+                config,
+                log=log_cb,
+                update=lambda values: self._update_acceleration(status, values),
+                cancelled=lambda: status.status == "stopped",
+            )
+            config['_hardware_session'] = hardware_session
             tasks = self._get_tasks_from_config(config)
             if not tasks:
                 log_cb(">>> [错误] 找不到任何素材目录！")
@@ -144,6 +157,7 @@ class TaskService:
                 # Group folders are global configuration, not inferred from Hook subfolders.
                 task_cfg['body_groups'] = config.get('body_groups') or []
                 task_cfg['out_dir'] = t['out']
+                task_cfg['_hardware_session'] = hardware_session
                 os.makedirs(task_cfg['out_dir'], exist_ok=True)
 
                 core = VideoMatrixCore(task_cfg, log_cb, self.shared_cache)
@@ -176,7 +190,7 @@ class TaskService:
             success_counts = {core.task_name: 0 for core in cores}
             completed = 0
 
-            concurrent_limit = config.get('concurrent_tasks', 3)
+            concurrent_limit = max(1, int(config.get('concurrent_tasks', 3)))
             with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_limit) as executor:
                 futures = {executor.submit(self._render_job, core, idx, status): core for core, idx in jobs}
                 for future in concurrent.futures.as_completed(futures):
@@ -210,12 +224,22 @@ class TaskService:
                 self.active_cores.pop(task_id, None)
                 self.variant_processes.pop(task_id, None)
 
+    @staticmethod
+    def _update_acceleration(status: TaskStatus, values: dict):
+        """Expose the effective backend without making users run a report."""
+        if "acceleration" in values:
+            status.acceleration = str(values["acceleration"] or "")
+        if "acceleration_warning" in values:
+            status.acceleration_warning = str(values["acceleration_warning"] or "")
+        if "effective_concurrency" in values:
+            status.effective_concurrency = max(0, int(values["effective_concurrency"]))
+
     def _render_job(self, core: VideoMatrixCore, idx: int, status: TaskStatus) -> bool:
         if status.status == "stopped" or not core.is_running:
             return False
         result, output_path, elapsed = core.render_single_video(idx, return_result=True)
         output_config = getattr(core, 'output_configs', {}).pop(idx, core.config)
-        if result and output_path and core.config.get('enable_variants'):
+        if result and output_path and core.config.get('enable_variants') and not output_config.get('_variant_applied'):
             variant_started = time.time()
             seed = derive_variant_seed(
                 int(core.config.get('variant_seed') or 0), core.task_name, idx,
@@ -248,7 +272,7 @@ class TaskService:
             )
             try:
                 ok, error, summary = self.cover_processor.process(
-                    output_path, core.config, seed,
+                    output_path, output_config, seed,
                     is_cancelled=lambda: status.status == "stopped" or not core.is_running,
                     on_process=lambda process: self._track_variant_process(status.task_id, process),
                 )
@@ -357,31 +381,46 @@ class TaskService:
 
         for n in range(1, 5):
             test_cfg = raw_config.copy()
+            benchmark_dir = tempfile.mkdtemp(prefix="videomatrix-benchmark-")
             test_cfg.update({
                 'hook_dir': tasks[0]['hook_dir'],
                 'body_dirs': tasks[0]['body_dirs'],
                 'body_groups': raw_config.get('body_groups') or [],
-                'out_dir': os.path.join(os.path.dirname(__file__), '../../../temp'),
+                'out_dir': benchmark_dir,
                 'target_count': 2,
                 'task_name': 'Test'
             })
-            os.makedirs(test_cfg['out_dir'], exist_ok=True)
-            core = VideoMatrixCore(test_cfg, log_cb, self.shared_cache)
-            if not core.pre_flight_check()[0]:
-                return {"error": "素材不足以支撑压测"}
+            try:
+                os.makedirs(test_cfg['out_dir'], exist_ok=True)
+                # Never consume production usage history during a benchmark.
+                core = VideoMatrixCore(test_cfg, log_cb, SharedMediaCache(benchmark_dir))
+                if not core.pre_flight_check()[0]:
+                    return {"error": "素材不足以支撑压测"}
+                benchmark_status = TaskStatus(
+                    task_id=f"benchmark-{n}", task_name="Benchmark", status="running",
+                    created_at=datetime.now(), total=n,
+                )
 
-            start_t = time.time()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
-                fs = [ex.submit(core.render_single_video, i) for i in range(1, n + 1)]
-                concurrent.futures.wait(fs)
-            elapsed = time.time() - start_t
-            t_per_v = elapsed / n
-            results[n] = {
-                "concurrent": n,
-                "total_time": round(elapsed, 2),
-                "avg_per_video": round(t_per_v, 2)
-            }
+                start_t = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
+                    fs = [ex.submit(self._render_job, core, i, benchmark_status)
+                          for i in range(1, n + 1)]
+                    results_raw = [future.result() for future in fs]
+                elapsed = time.time() - start_t
+                successful = [item for item in results_raw if item]
+                if len(successful) != n:
+                    continue
+                t_per_v = elapsed / n
+                results[n] = {
+                    "concurrent": n,
+                    "total_time": round(elapsed, 2),
+                    "avg_per_video": round(t_per_v, 2)
+                }
+            finally:
+                shutil.rmtree(benchmark_dir, ignore_errors=True)
 
+        if not results:
+            return {"error": "压测期间没有成功完成可比较的成品"}
         best_n = min(results, key=lambda k: results[k]["avg_per_video"])
         return {
             "results": results,

@@ -247,6 +247,14 @@ function TaskRow({ task }: { task: TaskStatus }) {
     <div className="flex items-center gap-2 py-1.5 border-b border-white/[0.04] last:border-0">
       <span className={`w-8 shrink-0 text-[10px] font-mono ${t.text}`}>{t.label}</span>
       <span className="flex-1 text-[11px] text-foreground/85 truncate">{task.task_name}</span>
+      {task.acceleration && task.status === 'running' && (
+        <span
+          className={`max-w-44 truncate text-[10px] ${task.acceleration_warning ? 'text-amber-400' : 'text-muted-foreground'}`}
+          title={task.acceleration_warning || task.acceleration}
+        >
+          {task.acceleration_warning || task.acceleration}
+        </span>
+      )}
       {task.total > 0 && (
         <>
           <div className="w-20 h-px bg-white/[0.08] overflow-hidden relative">

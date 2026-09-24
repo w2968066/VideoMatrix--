@@ -156,6 +156,9 @@ export interface TaskStatus {
   updated_at?: string
   output_files: string[]
   output_elapsed?: Record<string, number>
+  acceleration?: string
+  acceleration_warning?: string
+  effective_concurrency?: number
 }
 
 export const api = {

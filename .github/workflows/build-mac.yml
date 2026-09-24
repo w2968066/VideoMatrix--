@@ -11,7 +11,7 @@ on:
       release_tag:
         description: "Release tag to upload the dmg to"
         required: true
-        default: "v2.3.0"
+        default: "v2.3.2"
   push:
     tags:
       - "v*"
@@ -38,9 +38,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller pytest
 
-      # ── Bundle ffmpeg (static mac arm64 + x64 build from evermeet) ────────
+      # ── Bundle macOS FFmpeg / FFprobe ───────────────────────────────────
       - name: Download FFmpeg static build
         run: |
           mkdir -p backend/ffmpeg
@@ -50,10 +50,18 @@ jobs:
           unzip -o ffprobe.zip -d backend/ffmpeg
           chmod +x backend/ffmpeg/ffmpeg backend/ffmpeg/ffprobe
 
+      - name: Test backend regressions
+        working-directory: backend
+        run: python -m pytest tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py -q
+
       # ── Backend → single self-contained binary ───────────────────────────
       - name: Build backend binary
         working-directory: backend
         run: pyinstaller --clean videomatrix-backend.spec
+
+      - name: Verify packaged backend identity and shutdown
+        working-directory: backend
+        run: VIDEOMATRIX_TEST_BINARY="$PWD/dist/videomatrix-backend" python -m pytest tests/test_runtime_startup.py -q
 
       # ── Node toolchain ───────────────────────────────────────────────────
       - name: Set up Node
@@ -69,7 +77,9 @@ jobs:
 
       - name: Build renderer / main / preload
         working-directory: frontend
-        run: npm run build
+        run: |
+          node --test tests/runtime.test.cjs
+          npm run build
 
       # ── Package as .dmg (extraResources pulls backend exe in automatically)
       - name: Generate macOS icon

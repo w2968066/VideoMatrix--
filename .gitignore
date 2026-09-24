@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.build-venv/
 venv/
 
 # Build outputs

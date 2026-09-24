@@ -1,5 +1,8 @@
 import os
 import sys
+import json
+import socket
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +16,7 @@ if getattr(sys, 'frozen', False):
 app = FastAPI(
     title="VideoMatrix API",
     description="VideoMatrix 短视频矩阵自动化混剪后端 API",
-    version="2.2.0"
+    version="2.3.2"
 )
 
 app.add_middleware(
@@ -29,7 +32,8 @@ app.include_router(router, prefix="/api")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": app.version,
+            "instance": os.environ.get("VIDEOMATRIX_INSTANCE", "")}
 
 
 def main() -> None:
@@ -46,7 +50,33 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    # Keep the socket open: port=0 is allocated atomically by the OS, with no
+    # find-free-port/close/rebind race against another desktop application.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind((args.host, args.port))
+    listener.listen(128)
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="info"))
+    if os.environ.get("VIDEOMATRIX_INSTANCE"):
+        print("VIDEOMATRIX_READY " + json.dumps({
+            "port": listener.getsockname()[1], "version": app.version,
+            "instance": os.environ["VIDEOMATRIX_INSTANCE"],
+        }), flush=True)
+
+        def watch_parent():
+            # Electron owns stdin. EOF also handles an abnormal desktop exit.
+            try:
+                while sys.stdin.buffer.read(1):
+                    pass
+            finally:
+                from .services.task_service import task_service
+                task_service.stop_all_tasks()
+                server.should_exit = True
+
+        threading.Thread(target=watch_parent, daemon=True).start()
+    try:
+        server.run(sockets=[listener])
+    finally:
+        listener.close()
 
 
 if __name__ == "__main__":

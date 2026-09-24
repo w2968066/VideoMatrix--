@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import re
+import time
 from typing import Optional, Tuple, List
 
 
@@ -21,6 +22,9 @@ def _find_tool(name: str) -> str:
     local = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), name)
     if os.path.exists(local):
         return local
+    bundled = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'ffmpeg', name)
+    if os.path.isfile(bundled):
+        return bundled
     return name
 
 
@@ -246,56 +250,61 @@ def build_filter_complex(
     return filter_complex.strip('; '), current_v, audio_map
 
 
+def run_process(command, is_cancelled=None, on_process=None, timeout=None, cwd=None):
+    """Drain stderr without a pipe deadlock; cancellation also applies to base renders."""
+    started = time.monotonic()
+    try:
+        with tempfile.TemporaryFile() as errors:
+            process = subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=errors, cwd=cwd,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            )
+            if on_process:
+                on_process(process)
+            try:
+                while process.poll() is None:
+                    cancelled = is_cancelled and is_cancelled()
+                    expired = timeout is not None and time.monotonic() - started > timeout
+                    if cancelled or expired:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=3)
+                        return False, '已停止' if cancelled else 'FFmpeg timeout'
+                    try:
+                        process.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                errors.seek(0, os.SEEK_END)
+                errors.seek(max(0, errors.tell() - 8000))
+                detail = errors.read().decode('utf-8', errors='replace')
+                return process.returncode == 0, detail or None
+            finally:
+                if on_process:
+                    on_process(None)
+    except OSError as exc:
+        return False, str(exc)
+
+
 def render_video(
     cmd_base: List[str],
     enable_gpu: bool,
     output_path: str,
     temp_dir: str,
+    config=None,
+    log=None,
+    is_cancelled=None,
+    on_process=None,
 ) -> Tuple[bool, Optional[str]]:
     """
     执行 FFmpeg 渲染。
     返回: (success, error_message)
     """
-    import uuid
-    from datetime import datetime
-    
-    err_file = os.path.join(temp_dir, f"fferr_{uuid.uuid4().hex[:6]}.txt")
-    
-    if enable_gpu:
-        cmd = cmd_base + ['-c:v', 'h264_nvenc', output_path]
-    else:
-        cmd = cmd_base + ['-c:v', 'libx264', '-preset', 'fast', output_path]
-    
-    try:
-        with open(err_file, 'w', encoding='utf-8', errors='ignore') as err_f:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=temp_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=err_f,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-            )
-            proc.wait()
-        
-        if proc.returncode != 0:
-            try:
-                with open(err_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    err_text = f.read()
-                log_path = os.path.join(os.getcwd(), "ffmpeg_error_log.txt")
-                with open(log_path, 'a', encoding='utf-8', errors='ignore') as log_f:
-                    log_f.write(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 渲染失败\n")
-                    log_f.write(f"执行命令: {' '.join(cmd)}\n")
-                    log_f.write(f"FFmpeg 底层报错:\n{err_text}\n")
-                    log_f.write("-" * 60 + "\n")
-            except Exception:
-                pass
-            return False, err_text if 'err_text' in dir() else "FFmpeg 渲染失败"
-        
-        return True, None
-    except Exception as e:
-        return False, str(e)
-    finally:
-        try:
-            os.remove(err_file)
-        except Exception:
-            pass
+    from .hardware import session_for
+    runtime = config if config is not None else {'enable_gpu': enable_gpu}
+    return session_for(runtime, log).run(
+        cmd_base, [output_path], '混剪', is_cancelled, on_process,
+        runner=lambda command: run_process(command, is_cancelled, on_process, cwd=temp_dir),
+    )

@@ -42,7 +42,7 @@ class VideoConfig(BaseModel):
     enable_srt: bool = Field(default=False, description="是否启用硬字幕")
     subtitle_y_percent: float = Field(default=92.0, ge=8.0, le=92.0, description="字幕垂直位置百分比")
     subtitle_font_size_percent: float = Field(default=5.6, ge=3.0, le=9.0, description="字幕字号占画面高度百分比")
-    enable_gpu: bool = Field(default=True, description="优先使用NVIDIA GPU编码")
+    enable_gpu: bool = Field(default=True, description="自动选择可用硬件编码；不可用时继续使用CPU")
     concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 
     enable_variants: bool = Field(default=False, description="启用混剪后的成品变换层")
@@ -76,6 +76,9 @@ class TaskStatus(BaseModel):
     updated_at: Optional[datetime] = None
     output_files: List[str] = Field(default_factory=list)
     output_elapsed: Dict[str, float] = Field(default_factory=dict)
+    acceleration: str = ""
+    acceleration_warning: str = ""
+    effective_concurrency: int = 0
 
 
 class ProbeResult(BaseModel):

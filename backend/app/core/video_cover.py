@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from .ffmpeg import FFMPEG, FFPROBE, probe_media, run_cmd
 from .video_variant import VideoVariantProcessor
+from .hardware import session_for
 
 
 class RandomCoverProcessor:
@@ -94,24 +95,14 @@ class RandomCoverProcessor:
             "-map", "[vout]",
             "-r", fps, "-frames:v", str(output_frame_count), "-pix_fmt", "yuv420p",
         ]
-        error = None
-        for use_gpu in ((True, False) if config.get("enable_gpu", True) else (False,)):
-            if is_cancelled and is_cancelled():
-                temp_path.unlink(missing_ok=True)
-                video_temp_path.unlink(missing_ok=True)
-                return False, "已停止", summary
-            command = list(base)
-            if use_gpu:
-                command.extend(["-c:v", "h264_nvenc", "-preset", "p4"])
-            else:
-                command.extend(["-c:v", "libx264", "-preset", "fast"])
-            command.extend(["-b:v", str(config.get("bitrate", "8000k")), "-f", "mp4", str(video_temp_path)])
-            ok, error = VideoVariantProcessor._run(command, is_cancelled, on_process)
-            if ok:
-                break
-            if not use_gpu:
-                video_temp_path.unlink(missing_ok=True)
-                return False, error or "随机封面处理失败", summary
+        ok, error = session_for(config).run(
+            base, ["-b:v", str(config.get("bitrate", "8000k")), "-f", "mp4", str(video_temp_path)],
+            '随机封面', is_cancelled, on_process,
+            runner=lambda command: VideoVariantProcessor._run(command, is_cancelled, on_process),
+        )
+        if not ok:
+            VideoVariantProcessor._unlink_with_retry(video_temp_path)
+            return False, error or "随机封面处理失败", summary
 
         if is_cancelled and is_cancelled():
             VideoVariantProcessor._unlink_with_retry(video_temp_path)

@@ -23,6 +23,7 @@ class AdapterError(RuntimeError):
 class VideoMatrixClient:
     def __init__(self, api_url: str | None = None, backend_exe: str | None = None):
         self.api_url = (api_url or os.environ.get("VIDEOMATRIX_API_URL") or DEFAULT_API_URL).rstrip("/")
+        self.auto_discover = not (api_url or os.environ.get("VIDEOMATRIX_API_URL"))
         self.backend_exe = backend_exe or os.environ.get("VIDEOMATRIX_BACKEND_EXE")
 
     def _request(
@@ -69,6 +70,21 @@ class VideoMatrixClient:
         return json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
 
     def ensure_backend(self, startup_timeout: float = 20.0) -> None:
+        if self.auto_discover:
+            runtime_file = Path(os.environ.get("APPDATA") or Path.home()) / "VideoMatrix" / "desktop-runtime.json"
+            if runtime_file.is_file():
+                try:
+                    runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
+                    port = runtime['port']
+                    if not isinstance(port, int) or not 1 <= port <= 65535:
+                        raise ValueError('invalid port')
+                    self.api_url = f"http://127.0.0.1:{port}/api"
+                    health = self._request("GET", "/health", timeout=1.5)
+                    if not runtime.get('instance') or health.get('instance') != runtime['instance'] or health.get('version') != runtime.get('version'):
+                        raise ValueError('backend identity mismatch')
+                    return
+                except (OSError, ValueError, KeyError, AdapterError) as exc:
+                    raise AdapterError("桌面后端已退出或身份不匹配，请重新打开 VideoMatrix。") from exc
         try:
             self._request("GET", "/health", timeout=1.5)
             return

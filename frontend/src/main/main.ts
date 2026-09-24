@@ -3,6 +3,8 @@ import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
+import { randomUUID } from 'crypto'
+import { validateIdentity } from './backendHandshake'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
@@ -63,7 +65,10 @@ function readPrepareUpdate(argv: string[]): PrepareRequest | null {
 }
 
 const isDev = process.env.NODE_ENV === 'development'
-const BACKEND_PORT = 8765
+let backendPort = 0
+const backendInstance = randomUUID()
+let backendVerified = false
+const runtimeFile = path.join(process.env.APPDATA || os.homedir(), 'VideoMatrix', 'desktop-runtime.json')
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let pendingPrepareRequest = hasSingleInstanceLock ? readPrepareUpdate(process.argv) : null
 
@@ -95,66 +100,115 @@ function getBundledBackendBinary(): string | null {
   return fs.existsSync(candidate) ? candidate : null
 }
 
-function startBackend() {
+async function startBackend(): Promise<void> {
   const bundled = getBundledBackendBinary()
-
-  if (bundled) {
-    // Production path — single self-contained binary, no Python required.
-    logDev(`[Main] Launching bundled backend: ${bundled} --port ${BACKEND_PORT}`)
-    backendProcess = spawn(
-      bundled,
-      ['--port', String(BACKEND_PORT), '--host', '127.0.0.1'],
-      {
-        cwd: path.dirname(bundled),
-        stdio: 'ignore',
-        env: { ...process.env },
-      }
-    )
-  } else {
-    // Dev path — assume system Python + project venv installed deps.
-    const backendDir = getDevBackendDir()
-    const python = os.platform() === 'win32' ? 'python' : 'python3'
-    logDev(`[Main] Launching dev backend: ${python} -m uvicorn app.main:app --port ${BACKEND_PORT}`)
-    backendProcess = spawn(
-      python,
-      ['-m', 'uvicorn', 'app.main:app', '--port', String(BACKEND_PORT), '--host', '127.0.0.1'],
-      {
-        cwd: backendDir,
-        stdio: 'pipe',
-        env: { ...process.env, PYTHONPATH: backendDir },
-      }
-    )
+  if (!bundled && !isDev) {
+    throw new Error('安装目录缺少后端程序，请重新安装完整安装包。')
   }
-
-  backendProcess.stdout?.on('data', (data) => {
-    logDev(`[Backend] ${data.toString().trim()}`)
-  })
-
-  backendProcess.stderr?.on('data', (data) => {
-    errorDev(`[Backend] ${data.toString().trim()}`)
-  })
-
-  backendProcess.on('error', (error) => {
-    errorDev(`[Backend] failed to start: ${error.message}`)
-  })
-
-  backendProcess.on('close', (code) => {
-    logDev(`[Backend] exited with code ${code}`)
+  const child = spawn(bundled || (process.env.VIDEOMATRIX_PYTHON || (os.platform() === 'win32' ? 'python' : 'python3')),
+    [...(bundled ? [] : ['run_backend.py']), '--port', '0', '--host', '127.0.0.1'], {
+      cwd: bundled ? path.dirname(bundled) : getDevBackendDir(),
+      stdio: 'pipe', windowsHide: true, detached: process.platform !== 'win32',
+      env: { ...process.env, VIDEOMATRIX_INSTANCE: backendInstance, PYTHONIOENCODING: 'utf-8' },
+    })
+  backendProcess = child
+  let errors = ''
+  child.stderr?.on('data', data => { errors = (errors + data.toString()).slice(-4000) })
+  child.stdin?.on('error', () => { /* Child may have exited before shutdown. */ })
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    let buffer = ''
+    let checking = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve()
+    }
+    const timer = setTimeout(() => finish(new Error(`后端启动超时，可能安装不完整或被安全软件阻止。\n${errors}`)), 45000)
+    child.on('error', error => finish(error))
+    child.on('close', code => {
+      if (!settled) finish(new Error(`后端启动失败（${code}）。\n${errors}`))
+      else if (backendVerified && !isQuitting) {
+        backendVerified = false
+        dialog.showErrorBox('VideoMatrix 后端已退出', `请重新打开软件。\n${errors}`)
+        void shutdownApp()
+      }
+    })
+    child.stdout?.on('data', data => {
+      buffer += data.toString()
+      let end: number
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end).trim()
+        buffer = buffer.slice(end + 1)
+        if (!line.startsWith('VIDEOMATRIX_READY ') || checking || settled) continue
+        checking = true
+        void (async () => {
+          try {
+            const ready = JSON.parse(line.slice('VIDEOMATRIX_READY '.length))
+            validateIdentity(ready, app.getVersion(), backendInstance)
+            backendPort = ready.port
+            while (!settled && !isQuitting) {
+              let health: any
+              try {
+                const response = await fetch(`http://127.0.0.1:${backendPort}/api/health`, { signal: AbortSignal.timeout(1500) })
+                if (response.ok) health = await response.json()
+              } catch { /* Socket was bound before uvicorn finished startup. */ }
+              if (health) {
+                validateIdentity({ ...health, port: backendPort }, app.getVersion(), backendInstance)
+                if (health.status !== 'ok') throw new Error('后端健康检查失败。')
+                backendVerified = true
+                try {
+                  fs.mkdirSync(path.dirname(runtimeFile), { recursive: true })
+                  const temporary = `${runtimeFile}.${backendInstance}.tmp`
+                  fs.writeFileSync(temporary, JSON.stringify({ ...health, port: backendPort }), 'utf8')
+                  fs.renameSync(temporary, runtimeFile)
+                } catch (error) { errorDev(`无法保存本地连接信息：${String(error)}`) }
+                finish()
+                return
+              }
+              await new Promise(done => setTimeout(done, 150))
+            }
+          } catch (error) { finish(error instanceof Error ? error : new Error(String(error))) }
+        })()
+      }
+      if (buffer.length > 16000) buffer = buffer.slice(-16000)
+    })
   })
 }
 
-function stopBackend() {
-  if (backendProcess) {
-    backendProcess.kill()
-    backendProcess = null
+async function stopBackend() {
+  const child = backendProcess
+  backendProcess = null
+  backendVerified = false
+  try {
+    if (JSON.parse(fs.readFileSync(runtimeFile, 'utf8')).instance === backendInstance) fs.unlinkSync(runtimeFile)
+  } catch { /* Another instance may own the discovery file. */ }
+  if (!child?.pid || child.exitCode !== null) return
+  // Kill only the process tree launched by this instance, including the
+  // PyInstaller worker and FFmpeg children; never kill by executable name.
+  if (process.platform === 'win32') {
+    await new Promise<void>(resolve => {
+      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+      killer.on('close', () => resolve())
+      killer.on('error', () => { child.stdin?.end(); child.kill(); resolve() })
+    })
+  } else {
+    try { process.kill(-child.pid, 'SIGTERM') } catch { child.stdin?.end() }
+    await new Promise(done => setTimeout(done, 500))
+    try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already exited. */ }
   }
 }
 
 async function stopBackendTasks(timeoutMs = 2500) {
+  if (!backendVerified) return
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/tasks/stop-all`, {
+    const health = await fetch(`http://127.0.0.1:${backendPort}/api/health`, { signal: controller.signal }).then(r => r.json())
+    validateIdentity({ ...health, port: backendPort }, app.getVersion(), backendInstance)
+    await fetch(`http://127.0.0.1:${backendPort}/api/tasks/stop-all`, {
       method: 'POST',
       signal: controller.signal,
     })
@@ -169,7 +223,7 @@ async function shutdownApp() {
   if (isQuitting) return
   isQuitting = true
   await stopBackendTasks()
-  stopBackend()
+  await stopBackend()
   mainWindow?.destroy()
   app.quit()
 }
@@ -188,7 +242,7 @@ function createWindow() {
     maximizable: false,
     fullscreenable: false,
     autoHideMenuBar: true,
-    title: 'VideoMatrix',
+    title: `VideoMatrix ${app.getVersion()}`,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
@@ -197,6 +251,8 @@ function createWindow() {
     show: false,
     titleBarStyle: 'hiddenInset',
   })
+
+  mainWindow.on('page-title-updated', event => event.preventDefault())
 
   // 加载渲染进程
   if (isDev) {
@@ -303,7 +359,7 @@ ipcMain.handle('shell:openPath', async (_, filePath: string) => {
   await shell.openPath(filePath)
 })
 
-ipcMain.handle('app:getBackendPort', () => BACKEND_PORT)
+ipcMain.handle('app:getBackendPort', () => backendPort)
 
 // 应用生命周期
 if (!hasSingleInstanceLock) {
@@ -319,29 +375,32 @@ if (!hasSingleInstanceLock) {
     }
   })
 
-  app.whenReady().then(() => {
-    startBackend()
-    // 等待后端启动
-    setTimeout(createWindow, 1500)
+  app.whenReady().then(async () => {
+    try {
+      await startBackend()
+      if (!isQuitting) createWindow()
+    } catch (error) {
+      dialog.showErrorBox('VideoMatrix 启动失败', String(error))
+      await shutdownApp()
+    }
   })
 
   app.on('window-all-closed', () => {
     if (!isQuitting) {
       void shutdownApp()
     }
-    if (process.platform !== 'darwin') {
-      app.quit()
-    }
   })
 
   app.on('activate', () => {
-    if (mainWindow === null) {
+    if (mainWindow === null && backendVerified && !isQuitting) {
       createWindow()
     }
   })
 
-  app.on('before-quit', () => {
-    isQuitting = true
-    stopBackend()
+  app.on('before-quit', event => {
+    if (!isQuitting) {
+      event.preventDefault()
+      void shutdownApp()
+    }
   })
 }

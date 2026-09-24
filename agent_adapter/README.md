@@ -41,6 +41,6 @@ codex mcp add videomatrix --env "PYTHONPATH=C:\VideoMatrix" -- C:\VideoMatrix\ag
 
 可选环境变量：
 
-- `VIDEOMATRIX_API_URL`：默认 `http://127.0.0.1:8765/api`
+- `VIDEOMATRIX_API_URL`：可显式指定 API；未设置时优先发现 2.3.2 桌面版的动态端口并校验身份，无桌面连接记录时兼容独立后端 `http://127.0.0.1:8765/api`。
 - `VIDEOMATRIX_BACKEND_EXE`：指定后端 exe 绝对路径
 - `VIDEOMATRIX_APP_EXE`：指定桌面程序绝对路径

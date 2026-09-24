@@ -16,11 +16,17 @@ function App() {
   }, [setBackendReady])
 
   useEffect(() => {
-    const interval = setInterval(async () => {
-      try { const tasks = await api.listTasks(); setTasks(tasks) }
-      catch {}
-    }, 2000)
-    return () => clearInterval(interval)
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const tasks = await api.listTasks()
+        if (!cancelled) setTasks(tasks)
+      } catch { /* Retry transient connection failures without losing log cursors. */ }
+      if (!cancelled) timer = setTimeout(poll, 1000)
+    }
+    void poll()
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [setTasks])
 
   if (!backendReady) {

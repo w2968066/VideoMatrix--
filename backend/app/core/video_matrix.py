@@ -128,6 +128,7 @@ class VideoMatrixCore:
     """单库视频处理实例"""
     def __init__(self, config: dict, log_callback: Callable, shared_cache: SharedMediaCache):
         self.config = config
+        self.rng = random.Random(config['_selection_seed']) if '_selection_seed' in config else random
         self.log = log_callback
         self.shared = shared_cache
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -147,6 +148,7 @@ class VideoMatrixCore:
 
         self.is_running = True
         self.current_process = None
+        self.processes = set()
         self.core_lock = threading.Lock()
 
     def _scan_files(self, dir_path: str, exts: tuple) -> List[str]:
@@ -408,7 +410,7 @@ class VideoMatrixCore:
             offset_label = '实际 Hook 结束' if cfg.get('hook_full_duration') else f'{t_hook:g} 秒'
             self.log(f"[{self.task_name}] 成品 Hook 保护：{', '.join(protected)} 从 {offset_label}后开始生效。")
 
-        random.shuffle(self.hook_pool)
+        self.rng.shuffle(self.hook_pool)
         return True, "预检通过"
 
     def render_single_video(self, task_idx: int, return_result: bool = False):
@@ -428,25 +430,25 @@ class VideoMatrixCore:
             if cfg.get('hook_full_duration'):
                 if not self.hook_cycle:
                     self.hook_cycle = list(self.hook_pool)
-                    random.shuffle(self.hook_cycle)
+                    self.rng.shuffle(self.hook_cycle)
                 hook_clip = self.hook_cycle.pop()
                 cfg['t_hook'] = hook_clip['duration']
             elif cfg['hook_r'] >= 0.99:
-                hook_clip = random.choice(self.hook_pool)
+                hook_clip = self.rng.choice(self.hook_pool)
             else:
                 hook_clip = self.hook_pool.pop()
 
             if cfg.get('body_mode', 'normal') == 'grouped':
                 body_clips = []
                 for spec, pool in zip(body_specs, self.body_group_pools):
-                    body_clips.extend(random.sample(pool, spec['clip_count']))
+                    body_clips.extend(self.rng.sample(pool, spec['clip_count']))
             elif len(self.body_pool) >= (cfg['total_clips'] - 1):
-                body_clips = random.sample(self.body_pool, cfg['total_clips'] - 1)
+                body_clips = self.rng.sample(self.body_pool, cfg['total_clips'] - 1)
             else:
-                body_clips = random.choices(self.body_pool, k=cfg['total_clips'] - 1)
+                body_clips = self.rng.choices(self.body_pool, k=cfg['total_clips'] - 1)
 
-            bgm_clip = random.choice(self.bgm_pool)
-            voice_clip = random.choice(self.voice_pool) if self.voice_pool else None
+            bgm_clip = self.rng.choice(self.bgm_pool)
+            voice_clip = self.rng.choice(self.voice_pool) if self.voice_pool else None
 
         apply_timeline_totals(cfg)
         t_hook = cfg['t_hook']
@@ -491,6 +493,10 @@ class VideoMatrixCore:
             inputs.append(cfg['watermark_path'])
             watermark_idx = len(inputs) - 1
 
+        # Accurate input seeking skips long unused prefixes. Keep one second of
+        # preroll, then trim residual timestamps for frame/audio boundary accuracy.
+        seek_offsets = [max(0.0, float(c['start']) - 1.0) for c in clips]
+        bgm_seek = max(0.0, float(bgm_clip['start']) - 1.0)
         cmd = [FFMPEG, '-y']
         for idx, inp in enumerate(inputs):
             if idx == watermark_idx:
@@ -502,7 +508,10 @@ class VideoMatrixCore:
                 else:
                     cmd.extend(['-i', inp])
             else:
-                cmd.extend(['-i', inp])
+                offset = seek_offsets[idx] if idx < len(clips) else bgm_seek if idx == len(clips) else 0.0
+                if offset > 0:
+                    cmd.extend(['-ss', f'{offset:.9f}'])
+                cmd.extend(['-threads', '2', '-i', inp])
 
         n_clips = len(clips)
         res_str = cfg['resolution'].lower().replace('*', 'x')
@@ -510,7 +519,7 @@ class VideoMatrixCore:
         
         filter_complex = ""
         for i, clip in enumerate(clips):
-            start, dur, clip_has_audio = clip['start'], clip['duration'], clip.get('has_audio', False)
+            start, dur, clip_has_audio = clip['start'] - seek_offsets[i], clip['duration'], clip.get('has_audio', False)
             filter_complex += (
                 f"[{i}:v]trim=start={start}:duration={dur},setpts=PTS-STARTPTS,"
                 f"fps={fps_val},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
@@ -568,7 +577,7 @@ class VideoMatrixCore:
             bgm_offset = 0.0 if cfg.get('apply_bgm_to_hook', True) else t_hook
             bgm_delay = f",adelay={int(round(bgm_offset * 1000))}|{int(round(bgm_offset * 1000))}" if bgm_offset > 0 else ""
             filter_complex += (
-                f"[{bgm_idx}:a]atrim=start={bgm_clip['start']}:duration={bgm_clip['duration']},"
+                f"[{bgm_idx}:a]atrim=start={bgm_clip['start'] - bgm_seek}:duration={bgm_clip['duration']},"
                 f"asetpts=PTS-STARTPTS,aresample=44100,"
                 f"aformat=sample_fmts=fltp:channel_layouts=stereo,volume={vol_bgm}"
                 f"{bgm_delay}[aout_bgm_v]; "
@@ -633,6 +642,13 @@ class VideoMatrixCore:
             audio_map = "[aout_final]"
 
         filter_complex = filter_complex.strip('; ')
+        if cfg.get('enable_variants') and cfg.get('_fuse_variants', True):
+            from .video_variant import VideoVariantProcessor, derive_variant_seed
+            seed = derive_variant_seed(int(cfg.get('variant_seed') or 0), self.task_name, task_idx)
+            extra, current_v, audio_map, summary = VideoVariantProcessor.inline_filters(cfg, seed, current_v, audio_map)
+            if extra:
+                filter_complex += '; ' + extra
+            cfg['_variant_applied'] = summary
         out_name = f"{self.task_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{task_idx:03d}.mp4"
         out_path = os.path.join(cfg['out_dir'], out_name)
 
@@ -641,11 +657,14 @@ class VideoMatrixCore:
             cmd.extend(['-map', audio_map, '-c:a', 'aac'])
         cmd.extend(['-r', fps_val, '-b:v', cfg['bitrate'], '-t', f"{t_total:.3f}"])
 
-        success, error = render_video(cmd, cfg.get('enable_gpu', True), out_path, self.temp_dir_path)
-
+        success, error = render_video(
+            cmd, cfg.get('enable_gpu', True), out_path, self.temp_dir_path,
+            config=cfg, log=self.log, is_cancelled=lambda: not self.is_running,
+            on_process=self._track_process,
+        )
         if not success and self.is_running:
-            # 如果 GPU 编码失败，尝试 CPU 编码
-            success, error = render_video(cmd, False, out_path, self.temp_dir_path)
+            from .hardware import short_error
+            self.log(f"    [{self.task_name}] 视频 {task_idx:03d} 失败：{short_error(error)}")
 
         if success and self.is_running:
             if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
@@ -664,10 +683,19 @@ class VideoMatrixCore:
             return (True, out_path, self.last_elapsed) if return_result else True
         return (False, None, None) if return_result else False
 
+    def _track_process(self, process):
+        with self.core_lock:
+            if process is not None:
+                self.processes.add(process)
+            else:
+                self.processes = {p for p in self.processes if p.poll() is None}
+
     def stop(self):
         self.is_running = False
-        if self.current_process:
+        with self.core_lock:
+            processes = list(self.processes)
+        for process in processes:
             try:
-                self.current_process.terminate()
+                process.terminate()
             except Exception:
                 pass

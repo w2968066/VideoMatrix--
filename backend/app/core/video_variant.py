@@ -4,6 +4,7 @@ import hashlib
 import math
 import os
 import random
+import re
 import subprocess
 import tempfile
 import time
@@ -13,7 +14,8 @@ from pathlib import Path
 from fractions import Fraction
 from typing import Callable, Optional
 
-from .ffmpeg import FFMPEG, probe_media
+from .ffmpeg import FFMPEG, probe_media, run_process
+from .hardware import session_for
 from .timeline import apply_timeline_totals, body_segment_specs
 
 
@@ -146,6 +148,27 @@ def summarize_variant_plan(plan: list[SegmentVariant], seed: int) -> dict:
 
 
 class VideoVariantProcessor:
+    @staticmethod
+    def inline_filters(config: dict, seed: int, video_label: str, audio_label: str | None):
+        """Apply existing effects after compositing, without an intermediate lossy encode."""
+        plan = build_variant_plan(config, seed)
+        summary = summarize_variant_plan(plan, seed)
+        if not any(item.enabled for item in plan):
+            return '', video_label, audio_label, summary
+        width, height = parse_resolution(config)
+        filters, video_out, audio_out = VideoVariantProcessor._build_filters(
+            plan, width, height, str(config.get('fps', '24')), bool(audio_label),
+        )
+        # Filter outputs (unlike input streams) need explicit split/asplit consumers.
+        filters = re.sub(r'\[([va]\w*)\]', r'[variant_\1]', filters)
+        prefix = f"{video_label}split={len(plan)}" + ''.join(f'[variant_src_v{i}]' for i in range(len(plan))) + ';'
+        if audio_label:
+            prefix += f"{audio_label}asplit={len(plan)}" + ''.join(f'[variant_src_a{i}]' for i in range(len(plan))) + ';'
+        for i in range(len(plan)):
+            filters = filters.replace('[0:v]', f'[variant_src_v{i}]', 1)
+            filters = filters.replace('[0:a]', f'[variant_src_a{i}]', 1)
+        return prefix + filters, '[variant_vout]', '[variant_aout]' if audio_out else None, summary
+
     def process(
         self,
         input_path: str,
@@ -185,26 +208,16 @@ class VideoVariantProcessor:
             "-t", f"{total_duration:.3f}", "-map_metadata", "-1", "-movflags", "+faststart",
         ])
 
-        error = None
-        encoder_attempts = (True, False) if config.get("enable_gpu", True) else (False,)
-        for use_gpu in encoder_attempts:
-            if is_cancelled and is_cancelled():
-                temp_path.unlink(missing_ok=True)
-                return False, "已停止", summary
-            command = list(base_cmd)
-            if use_gpu:
-                command.extend(["-c:v", "h264_nvenc", "-preset", "p4"])
-            else:
-                command.extend(["-c:v", "libx264", "-preset", "fast"])
-            fps_number = float(Fraction(fps))
-            gop = max(12, int(round(fps_number * random.Random(seed).uniform(1.5, 2.8))))
-            command.extend(["-g", str(gop), "-bf", "2", "-f", "mp4", str(temp_path)])
-            ok, error = self._run(command, is_cancelled, on_process)
-            if ok:
-                break
-            if not use_gpu:
-                temp_path.unlink(missing_ok=True)
-                return False, error, summary
+        fps_number = float(Fraction(fps))
+        gop = max(12, int(round(fps_number * random.Random(seed).uniform(1.5, 2.8))))
+        ok, error = session_for(config).run(
+            base_cmd, ["-g", str(gop), "-f", "mp4", str(temp_path)], '成品变换',
+            is_cancelled, on_process,
+            runner=lambda command: self._run(command, is_cancelled, on_process),
+        )
+        if not ok:
+            self._unlink_with_retry(temp_path)
+            return False, error, summary
 
         checked = probe_media(str(temp_path))
         if not checked or not temp_path.exists() or temp_path.stat().st_size < 1024:
@@ -315,32 +328,4 @@ class VideoVariantProcessor:
         is_cancelled: Callable[[], bool] | None,
         on_process: Callable[[Optional[subprocess.Popen]], None] | None,
     ) -> tuple[bool, str | None]:
-        with tempfile.TemporaryFile() as error_stream:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=error_stream,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            if on_process:
-                on_process(process)
-            try:
-                while process.poll() is None:
-                    if is_cancelled and is_cancelled():
-                        process.terminate()
-                        try:
-                            process.wait(timeout=3)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait(timeout=3)
-                        return False, "已停止"
-                    try:
-                        process.wait(timeout=0.2)
-                    except subprocess.TimeoutExpired:
-                        pass
-                error_stream.seek(0)
-                error = error_stream.read().decode("utf-8", errors="replace")
-                return process.returncode == 0, error[-2000:] or None
-            finally:
-                if on_process:
-                    on_process(None)
+        return run_process(command, is_cancelled, on_process)
