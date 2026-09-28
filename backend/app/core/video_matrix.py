@@ -254,6 +254,12 @@ class VideoMatrixCore:
         self.voice_pool.clear()
 
         cfg = self.config
+        cfg['bgm_dir'] = str(cfg.get('bgm_dir') or '').strip()
+        audio_mode = cfg.get('duration_mode') == 'bgm'
+        if audio_mode and not cfg['bgm_dir']:
+            return False, '按 BGM 时长生成需要选择 BGM，请选择音频或切回按片段数量。'
+        if cfg['bgm_dir'] and not os.path.exists(cfg['bgm_dir']):
+            return False, 'BGM 路径不存在，请重新选择；不需要配乐时请清空路径。'
         t_hook = cfg['t_hook']
         apply_timeline_totals(cfg)
         body_specs = body_segment_specs(cfg)
@@ -332,10 +338,15 @@ class VideoMatrixCore:
                 duration = spec['clip_duration']
                 for f in files:
                     dur, has_audio, _ = probe_results[f]
+                    if spec.get('full_duration'):
+                        full_duration = dur + MEDIA_END_SAFETY_MARGIN if dur > 0 else extract_media_info(probe_media(f) or {}, f, safety_margin=0)[0]
+                        if full_duration > 0:
+                            pool.append({'file': f, 'start': 0.0, 'duration': full_duration, 'has_audio': has_audio})
+                        continue
                     step = max(duration * (1 - cfg['body_r']), 0.1)
                     for i in range(slice_count(dur, duration, step)):
                         pool.append({'file': f, 'start': i * step, 'duration': duration, 'has_audio': has_audio})
-                if len(pool) < spec['clip_count']:
+                if not audio_mode and len(pool) < spec['clip_count']:
                     return False, (
                         f"库 [{self.task_name}] Body 分组 {spec['group_index']} 素材不足："
                         f"需要 {spec['clip_count']} 段，可用 {len(pool)} 段。"
@@ -343,8 +354,13 @@ class VideoMatrixCore:
                 self.body_group_pools.append(pool)
         else:
             t_body = cfg['t_body']
-            for f in body_files:
+            for f in dict.fromkeys(body_files):
                 dur, has_audio, _ = probe_results[f]
+                if cfg.get('body_full_duration'):
+                    full_duration = dur + MEDIA_END_SAFETY_MARGIN if dur > 0 else extract_media_info(probe_media(f) or {}, f, safety_margin=0)[0]
+                    if full_duration > 0:
+                        self.body_pool.append({'file': f, 'start': 0.0, 'duration': full_duration, 'has_audio': has_audio})
+                    continue
                 step = max(t_body * (1 - cfg['body_r']), 0.1)
                 n = slice_count(dur, t_body, step)
                 for i in range(n):
@@ -377,26 +393,50 @@ class VideoMatrixCore:
                 self.log(f"[{self.task_name}] 提示: 首段仅剩 {self.n_total} 个片段，已自动下调目标产量。")
                 cfg['target_count'] = self.n_total
 
-        if not grouped_body and len(self.body_pool) < cfg['total_clips'] - 1:
+        if not audio_mode and not grouped_body and len(self.body_pool) < cfg['total_clips'] - 1:
             return False, f"库 [{self.task_name}] 后段素材不足拼凑 1 个视频。"
 
-        if cfg.get('hook_full_duration') and cfg.get('apply_bgm_to_hook', True):
-            bgm_duration = max(clip['duration'] for clip in self.hook_pool) + body_duration
+        if not audio_mode:
+            pools = self.body_group_pools if grouped_body else [self.body_pool]
+            body_duration = sum(sum(sorted((c['duration'] for c in pool), reverse=True)[:spec['clip_count']]) for spec, pool in zip(body_specs, pools))
+            bgm_duration = body_duration + (max(clip['duration'] for clip in self.hook_pool) if cfg.get('apply_bgm_to_hook', True) else 0)
         for f in bgm_files:
             _, has_audio, audio_dur = probe_results[f]
             if has_audio:
+                if audio_mode:
+                    # Cached audio durations subtract the safety margin for slicing.
+                    # Full-track mode must restore it, including the audio tail.
+                    duration = audio_dur + MEDIA_END_SAFETY_MARGIN if audio_dur > 0 else extract_audio_duration(probe_media(f) or {}, safety_margin=0)
+                    if duration > 0:
+                        self.bgm_pool.append({'file': f, 'start': 0.0, 'duration': duration})
+                    continue
                 step = max(bgm_duration * (1 - cfg['bgm_r']), 0.1)
                 n = slice_count(audio_dur, bgm_duration, step)
                 for i in range(n):
                     self.bgm_pool.append({'file': f, 'start': i * step, 'duration': bgm_duration})
 
-        if not self.bgm_pool:
+        if cfg['bgm_dir'] and not self.bgm_pool:
             return False, "BGM 素材不足，视频文件需包含音轨且时长足够。"
+
+        if audio_mode:
+            from .audio_timeline import fit_body_to_audio
+            try:
+                fit_body_to_audio(cfg, self.body_group_pools if grouped_body else [self.body_pool],
+                                  min(c['duration'] for c in self.hook_pool),
+                                  max(c['duration'] for c in self.bgm_pool), None)
+            except ValueError as exc:
+                return False, str(exc)
+            self.log(f'[{self.task_name}] 完整 BGM 模式：随机抽取整条音频；Body 按组循环补齐，超长裁尾。')
 
         for f in voice_files:
             _, has_audio, audio_dur = probe_results[f]
             if has_audio and audio_dur > 0:
                 self.voice_pool.append({'file': f, 'duration': audio_dur})
+
+        if not self.bgm_pool:
+            self.log(f'[{self.task_name}] 未选择 BGM：不添加背景音乐。')
+        if not (self.bgm_pool and cfg.get('vol_bgm', 0) > 0) and not (self.voice_pool and cfg.get('vol_voice', 0) > 0) and not (cfg.get('vol_orig', 0) > 0 or (cfg.get('vol_hook_orig') or 0) > 0):
+            self.log(f'[{self.task_name}] 提示：当前声音均关闭，将生成无声视频。')
 
         protected = [
             name for name, enabled in (
@@ -438,7 +478,15 @@ class VideoMatrixCore:
             else:
                 hook_clip = self.hook_pool.pop()
 
-            if cfg.get('body_mode', 'normal') == 'grouped':
+            bgm_clip = self.rng.choice(self.bgm_pool) if self.bgm_pool else None
+            if cfg.get('duration_mode') == 'bgm':
+                from .audio_timeline import fit_body_to_audio
+                try:
+                    body_clips = fit_body_to_audio(cfg, self.body_group_pools if cfg.get('body_mode') == 'grouped' else [self.body_pool], cfg['t_hook'], bgm_clip['duration'], self.rng)
+                except ValueError as exc:
+                    self.log(f'[{self.task_name}] {exc}')
+                    return (False, None, None) if return_result else False
+            elif cfg.get('body_mode', 'normal') == 'grouped':
                 body_clips = []
                 for spec, pool in zip(body_specs, self.body_group_pools):
                     body_clips.extend(self.rng.sample(pool, spec['clip_count']))
@@ -447,10 +495,25 @@ class VideoMatrixCore:
             else:
                 body_clips = self.rng.choices(self.body_pool, k=cfg['total_clips'] - 1)
 
-            bgm_clip = self.rng.choice(self.bgm_pool)
             voice_clip = self.rng.choice(self.voice_pool) if self.voice_pool else None
 
         apply_timeline_totals(cfg)
+        planned_body_duration = cfg['body_duration']
+        cfg['body_duration'] = sum(c['duration'] for c in body_clips)
+        cfg['_body_clip_durations'] = [c['duration'] for c in body_clips]
+        cfg['total_duration'] = cfg['t_hook'] + cfg['body_duration']
+        if cfg.get('duration_mode') != 'bgm' and any(spec.get('full_duration') for spec in body_specs):
+            self.log(f"[{self.task_name}] Body 使用原素材时长：{len(body_clips)} 段，共 {cfg['body_duration']:.3f}s；成片 {cfg['total_duration']:.3f}s。")
+        if cfg.get('duration_mode') == 'bgm':
+            old_body_duration = planned_body_duration
+            cfg['body_duration'] = sum(c['duration'] for c in body_clips)
+            cfg['_body_clip_durations'] = [c['duration'] for c in body_clips]
+            cfg['total_duration'] = cfg['t_hook'] + cfg['body_duration']
+            cfg['total_clips'] = 1 + len(body_clips)
+            action = '裁掉尾部多余素材' if cfg['body_duration'] < old_body_duration else '自动补满素材' if cfg['body_duration'] > old_body_duration else '时长刚好匹配'
+            self.log(f"[{self.task_name}] BGM {os.path.basename(bgm_clip['file'])} 完整 {bgm_clip['duration']:.3f}s；{action}，共 {cfg['total_clips']} 段 / {cfg['total_duration']:.3f}s。")
+            if cfg.get('apply_bgm_to_hook', True) and cfg['t_hook'] >= bgm_clip['duration']:
+                self.log(f"[{self.task_name}] 提示：保留完整 Hook，不追加 Body。" + ('BGM 未覆盖完整 Hook，剩余部分按原声设置输出。' if cfg['t_hook'] > bgm_clip['duration'] else '无剩余时长添加 Body。'))
         t_hook = cfg['t_hook']
         body_duration = cfg['body_duration']
         t_total = cfg['total_duration']
@@ -458,7 +521,7 @@ class VideoMatrixCore:
         temp_srt_path_safe = None
         with self.core_lock:
             self.output_configs[task_idx] = cfg
-        if cfg.get('enable_srt'):
+        if cfg.get('enable_srt') and (cfg.get('apply_srt_to_hook', True) or body_duration > 0):
             srt_on_hook = cfg.get('apply_srt_to_hook', True)
             temp_srt_path_safe = self.process_srt(
                 cfg['srt_dir'],
@@ -472,16 +535,16 @@ class VideoMatrixCore:
         vol_orig = cfg['vol_orig'] / 100.0
         hook_volume_value = cfg.get('vol_hook_orig')
         vol_hook_orig = (cfg['vol_orig'] if hook_volume_value is None else hook_volume_value) / 100.0
-        vol_bgm = cfg['vol_bgm'] / 100.0
+        vol_bgm = cfg['vol_bgm'] / 100.0 if bgm_clip else 0.0
         vol_voice = cfg['vol_voice'] / 100.0
         fps_val = str(cfg['fps'])
 
-        has_voice = bool(voice_clip and vol_voice > 0)
-        has_watermark = bool(cfg.get('watermark_path') and os.path.exists(cfg['watermark_path']))
+        has_voice = bool(voice_clip and vol_voice > 0 and (cfg.get('apply_voice_to_hook', True) or body_duration > 0))
+        has_watermark = bool(cfg.get('watermark_path') and os.path.exists(cfg['watermark_path']) and (cfg.get('apply_watermark_to_hook', True) or body_duration > 0))
         has_original_audio = vol_hook_orig > 0 or vol_orig > 0
 
         clips = [hook_clip] + list(body_clips)
-        inputs = [c['file'] for c in clips] + [bgm_clip['file']]
+        inputs = [c['file'] for c in clips] + ([bgm_clip['file']] if bgm_clip else [])
 
         voice_idx = -1
         if has_voice:
@@ -496,7 +559,7 @@ class VideoMatrixCore:
         # Accurate input seeking skips long unused prefixes. Keep one second of
         # preroll, then trim residual timestamps for frame/audio boundary accuracy.
         seek_offsets = [max(0.0, float(c['start']) - 1.0) for c in clips]
-        bgm_seek = max(0.0, float(bgm_clip['start']) - 1.0)
+        bgm_seek = max(0.0, float(bgm_clip['start']) - 1.0) if bgm_clip else 0.0
         cmd = [FFMPEG, '-y']
         for idx, inp in enumerate(inputs):
             if idx == watermark_idx:

@@ -89,6 +89,8 @@ def build_variant_plan(config: dict, seed: int) -> list[SegmentVariant]:
         for spec in body_segment_specs(normalized)
         for _ in range(spec["clip_count"])
     ]
+    if '_body_clip_durations' in config:
+        body_durations = list(config['_body_clip_durations'])
     width, height = parse_resolution(config)
     aspect = height / width
     plan: list[SegmentVariant] = []

@@ -9,7 +9,7 @@ from ..models.schemas import (
     TaskStatus, ScanRequest, ScanResponse, ProbeResult, VideoConfig
 )
 from ..services.task_service import task_service
-from ..core.ffmpeg import probe_media, extract_media_info
+from ..core.ffmpeg import probe_media, extract_media_info, extract_audio_duration
 
 router = APIRouter()
 
@@ -90,6 +90,9 @@ def scan_directory(req: ScanRequest):
     if not os.path.exists(req.dir_path):
         raise HTTPException(status_code=400, detail="目录不存在")
     files = []
+    if os.path.isfile(req.dir_path):
+        files = [req.dir_path] if any(req.dir_path.lower().endswith(ext.lower()) for ext in req.extensions) else []
+        return ScanResponse(files=files, count=len(files))
     for root, _, filenames in os.walk(req.dir_path):
         for f in filenames:
             if any(f.lower().endswith(ext) for ext in req.extensions):
@@ -109,6 +112,7 @@ def probe_file(file_path: str):
         file_path=file_path,
         duration=dur,
         source_duration=extract_media_info(info, file_path, safety_margin=0)[0],
+        audio_duration=extract_audio_duration(info, safety_margin=0),
         has_audio=has_audio,
         width=width,
         height=height,

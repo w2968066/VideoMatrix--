@@ -1,4 +1,3 @@
-import * as React from 'react'
 import { cn } from '../lib/utils'
 
 // ─── Asset type icons ─────────────────────────────────────────────────────────
@@ -56,6 +55,8 @@ export const AssetIcons = {
 }
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
+import { FeatureHelp } from './FeatureHelp'
+
 interface AssetCardProps {
   kind: keyof typeof AssetIcons
   label: string
@@ -83,8 +84,8 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
       className={cn(
         'group relative overflow-hidden rounded-[6px] transition-colors',
         filled
-          ? 'border border-accent/28 bg-white/[0.025]'
-          : 'border border-white/[0.07] bg-white/[0.012]',
+          ? 'border border-accent/28 bg-foreground/[0.025]'
+          : 'border border-border/[0.07] bg-foreground/[0.012]',
         'hover:border-accent/45'
       )}
     >
@@ -98,22 +99,25 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
             'w-6 h-6 rounded-[4px] flex items-center justify-center shrink-0 transition-colors',
             filled
               ? 'bg-accent/12 text-accent ring-1 ring-inset ring-accent/22 hover:bg-accent/20'
-              : 'bg-white/[0.03] text-muted-foreground',
+              : 'bg-foreground/[0.03] text-muted-foreground',
             (!filled || !onOpen) && 'cursor-default'
           )}
         >
           <span className="w-[14px] h-[14px] block">{AssetIcons[kind]}</span>
         </button>
-        <label className="w-[72px] shrink-0 text-[11px] text-foreground/85">
+        <span className="w-[104px] shrink-0 inline-flex items-center whitespace-nowrap text-[11px] text-foreground/85">
           {label}
+          {['bgm', 'voice', 'srt', 'watermark'].includes(kind) && <span className="ml-1 text-[9px] text-accent">可选</span>}
+          <FeatureHelp topic={kind} title={kind === 'bgm' ? 'BGM 配乐' : label} />
           {required && !filled && <span className="ml-1 text-hot/85">必填</span>}
-        </label>
+        </span>
         <input
+          aria-label={kind === 'bgm' ? 'BGM 路径' : label}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           title={value}
           placeholder={`${pickAction}或粘贴路径`}
-          className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70"
+          className="h-7 min-w-0 flex-1 rounded-[4px] border border-border/[0.10] bg-background-elev px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/55 focus:border-accent/70"
         />
         {filled && count !== undefined && (
           <span className="w-12 shrink-0 text-right font-mono text-[10px] tabular-nums text-accent/90">
@@ -123,7 +127,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
         <button
           type="button"
           onClick={onBrowse}
-          className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
+          className="h-7 shrink-0 rounded-[4px] border border-border/[0.08] bg-foreground/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
         >
           {pickAction}
         </button>
@@ -131,7 +135,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
           <button
             type="button"
             onClick={onSecondaryAction}
-            className="h-7 shrink-0 rounded-[4px] border border-white/[0.08] bg-white/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
+            className="h-7 shrink-0 rounded-[4px] border border-border/[0.08] bg-foreground/[0.015] px-3 text-[11px] text-foreground/85 hover:border-accent/50 hover:text-accent"
           >
             {secondaryAction}
           </button>
@@ -147,7 +151,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
               'h-7 w-[44px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors',
               enabled
                 ? 'border-accent/55 bg-accent/12 text-accent'
-                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground'
+                : 'border-border/[0.08] bg-foreground/[0.015] text-muted-foreground'
             )}
           >
             {enabled ? '已开启' : '已关闭'}
@@ -158,13 +162,14 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
             type="button"
             role="switch"
             aria-checked={bodyOnly}
+            disabled={kind === 'bgm' && !value.trim()}
             onClick={() => onBodyOnlyChange(!bodyOnly)}
             title={bodyOnly ? '当前仅作用于 Body，点击后改为全片生效' : '当前全片生效，点击后仅作用于 Body'}
             className={cn(
-              'h-7 w-[52px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors',
+              'h-7 w-[52px] shrink-0 rounded-[4px] border px-1.5 text-[9px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
               bodyOnly
                 ? 'border-accent/55 bg-accent/12 text-accent'
-                : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground'
+                : 'border-border/[0.08] bg-foreground/[0.015] text-muted-foreground'
             )}
           >
             {bodyOnly ? 'Body 开' : 'Body 关'}
@@ -174,7 +179,7 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClear() }}
-            className="h-7 shrink-0 rounded-[4px] border border-white/[0.07] bg-white/[0.01] px-2.5 text-[11px] text-muted-foreground hover:border-hot/40 hover:text-hot"
+            className="h-7 shrink-0 rounded-[4px] border border-border/[0.07] bg-foreground/[0.01] px-2.5 text-[11px] text-muted-foreground hover:border-hot/40 hover:text-hot"
             aria-label="清除"
           >
             清除

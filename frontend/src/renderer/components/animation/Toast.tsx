@@ -52,7 +52,8 @@ const ToastItemComponent: React.FC<{
 
   return (
     <div
-      className="bg-[#0E0E14] border border-white/[0.10] px-4 py-2.5 min-w-[240px] flex items-center gap-3 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
+      role="status"
+      className="bg-background-elev border border-border/[0.15] px-4 py-2.5 min-w-[240px] flex items-center gap-3 shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
       style={{
         animation: exiting
           ? 'toastOut 0.38s cubic-bezier(0.4,0,1,1) forwards'

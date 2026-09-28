@@ -9,7 +9,8 @@ class VideoConfig(BaseModel):
     body_dirs: List[str] = Field(default_factory=list, description="后段素材目录列表")
     body_mode: Literal["normal", "grouped"] = Field(default="normal", description="后段拼接模式")
     body_groups: List["BodyGroup"] = Field(default_factory=list, max_length=4, description="按顺序拼接的 Body 分组")
-    bgm_dir: str = Field(..., description="BGM 目录或带音轨的视频文件")
+    bgm_dir: str = Field(default="", description="可选 BGM 目录或带音轨的视频文件")
+    duration_mode: Literal["clips", "bgm"] = Field(default="clips", description="按片段数量或完整 BGM 时长生成")
     voice_dir: Optional[str] = Field(default=None, description="配音目录")
     srt_dir: Optional[str] = Field(default=None, description="字幕目录")
     watermark_path: Optional[str] = Field(default=None, description="水印图片/GIF路径")
@@ -18,6 +19,7 @@ class VideoConfig(BaseModel):
     t_hook: float = Field(default=3.0, ge=0.5, description="首段时长(秒)")
     hook_full_duration: bool = Field(default=False, description="按原素材时长使用完整 Hook，随机轮换")
     t_body: float = Field(default=3.0, ge=0.5, description="后段片段时长(秒)")
+    body_full_duration: bool = Field(default=False, description="普通 Body 使用完整原素材")
     total_clips: int = Field(default=5, ge=2, description="每视频总片段数")
     target_count: int = Field(default=10, ge=1, description="目标生成数量")
     
@@ -27,7 +29,7 @@ class VideoConfig(BaseModel):
     
     resolution: str = Field(default="1080*1920", description="输出分辨率")
     fps: Union[str, float, int] = Field(default="30", description="输出帧率")
-    bitrate: str = Field(default="5000k", description="视频码率")
+    bitrate: str = Field(default="8000k", description="视频码率")
     
     vol_orig: int = Field(default=80, ge=0, le=200, description="Body原声音量(%)")
     vol_hook_orig: Optional[int] = Field(default=None, ge=0, le=200, description="Hook原声音量(%)")
@@ -57,6 +59,7 @@ class VideoConfig(BaseModel):
 
 
 class BodyGroup(BaseModel):
+    full_duration: bool = Field(default=False, description="本组使用完整原素材")
     enabled: bool = Field(default=True, description="是否使用此组")
     folder: str = Field(default="", description="此组素材目录")
     clip_count: int = Field(default=1, ge=1, description="此组抽取片段数")
@@ -85,6 +88,7 @@ class ProbeResult(BaseModel):
     file_path: str
     duration: float
     source_duration: float = 0
+    audio_duration: float = 0
     has_audio: bool
     width: Optional[int] = None
     height: Optional[int] = None

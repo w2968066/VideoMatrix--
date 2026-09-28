@@ -43,6 +43,7 @@ const defaultConfig: VideoConfig = {
   body_mode: 'normal',
   body_groups: Array.from({ length: 4 }, (_, index) => ({ enabled: index === 0, folder: '', clip_count: 1, clip_duration: 3 })),
   bgm_dir: '',
+  duration_mode: 'clips',
   voice_dir: '',
   srt_dir: '',
   watermark_path: '',
@@ -50,6 +51,7 @@ const defaultConfig: VideoConfig = {
   t_hook: 3.0,
   hook_full_duration: false,
   t_body: 3.0,
+  body_full_duration: false,
   total_clips: 5,
   target_count: 10,
   hook_r: 0.5,
@@ -57,7 +59,7 @@ const defaultConfig: VideoConfig = {
   bgm_r: 0.3,
   resolution: '1080*1920',
   fps: '30',
-  bitrate: '5000k',
+  bitrate: '8000k',
   vol_orig: 80,
   vol_hook_orig: 80,
   vol_bgm: 30,
@@ -90,6 +92,7 @@ function loadSavedConfig(): VideoConfig {
     return {
       ...defaultConfig,
       ...saved,
+      duration_mode: saved.bgm_dir?.trim() && saved.duration_mode === 'bgm' ? 'bgm' : 'clips',
       body_mode: saved.body_mode === 'grouped' ? 'grouped' : 'normal',
       body_groups: Array.from({ length: 4 }, (_, index) => ({
         ...defaultConfig.body_groups[index],
@@ -120,6 +123,7 @@ export const useStore = create<AppState>((set) => ({
   setConfig: (partial) =>
     set((state) => {
       const config = { ...state.config, ...partial }
+      if (!config.bgm_dir.trim()) config.duration_mode = 'clips'
       localStorage.setItem('vm-config', JSON.stringify(config))
       return { config }
     }),

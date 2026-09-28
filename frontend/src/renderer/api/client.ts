@@ -42,6 +42,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export interface BodyGroup {
+  full_duration?: boolean
   enabled: boolean
   folder: string
   clip_count: string | number
@@ -55,6 +56,7 @@ export interface VideoConfig {
   body_mode: 'normal' | 'grouped'
   body_groups: BodyGroup[]
   bgm_dir: string
+  duration_mode: 'clips' | 'bgm'
   voice_dir?: string
   srt_dir?: string
   watermark_path?: string
@@ -62,6 +64,7 @@ export interface VideoConfig {
   t_hook: string | number
   hook_full_duration: boolean
   t_body: string | number
+  body_full_duration?: boolean
   total_clips: string | number
   target_count: string | number
   hook_r: string | number
@@ -120,6 +123,7 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
     return {
       enabled: Boolean(safeGroup.enabled),
       folder: String(safeGroup.folder || '').trim(),
+      full_duration: Boolean(safeGroup.full_duration),
       // Disabled rows stay at their position but must still satisfy Pydantic.
       clip_count: Number.isInteger(clipCount) && clipCount >= 1 ? clipCount : 1,
       clip_duration: Number.isFinite(clipDuration) && clipDuration >= 0.5 ? clipDuration : 3,
@@ -134,6 +138,9 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
     normalized.total_clips = Math.max(2, 1 + groupClipCount)
   }
   normalized.enable_random_cover = Boolean(config.enable_random_cover)
+  normalized.body_full_duration = Boolean(config.body_full_duration)
+  if (normalized.body_full_duration) normalized.t_body = 3
+  if (normalized.body_mode === 'grouped' ? normalizedGroups.filter(g => g.enabled).every(g => g.full_duration) : normalized.body_full_duration) normalized.body_r = 0
   normalized.hook_full_duration = Boolean(config.hook_full_duration)
   if (normalized.hook_full_duration) {
     normalized.t_hook = 3 // Hidden fixed-duration input must not invalidate this mode.

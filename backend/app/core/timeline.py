@@ -12,6 +12,7 @@ def body_segment_specs(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "folder": str(group.get("folder") or ""),
                 "clip_count": int(group.get("clip_count", 0)),
                 "clip_duration": float(group.get("clip_duration", 0)),
+                "full_duration": bool(group.get("full_duration", False)),
                 "group_index": index + 1,
             }
             for index, group in enumerate(config.get("body_groups") or [])
@@ -21,6 +22,7 @@ def body_segment_specs(config: dict[str, Any]) -> list[dict[str, Any]]:
         "folder": None,
         "clip_count": max(0, int(config.get("total_clips", 1)) - 1),
         "clip_duration": float(config.get("t_body", 0)),
+        "full_duration": bool(config.get("body_full_duration", False)),
         "group_index": 0,
     }]
 

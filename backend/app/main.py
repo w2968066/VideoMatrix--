@@ -16,7 +16,7 @@ if getattr(sys, 'frozen', False):
 app = FastAPI(
     title="VideoMatrix API",
     description="VideoMatrix 短视频矩阵自动化混剪后端 API",
-    version="2.3.2"
+    version="2.4.0"
 )
 
 app.add_middleware(

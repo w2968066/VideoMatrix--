@@ -106,7 +106,7 @@ def extract_media_info(info: dict, file_path: str, safety_margin: float = MEDIA_
     return dur, has_audio, width, height, fps
 
 
-def extract_audio_duration(info: dict) -> float:
+def extract_audio_duration(info: dict, safety_margin: float = MEDIA_END_SAFETY_MARGIN) -> float:
     """Return the safe duration of the first audio stream."""
     try:
         format_duration = float(info.get('format', {}).get('duration', 0.0) or 0.0)
@@ -121,7 +121,7 @@ def extract_audio_duration(info: dict) -> float:
                 stream_duration = float(duration)
                 return max(
                     0.0,
-                    min(format_duration or stream_duration, stream_duration) - MEDIA_END_SAFETY_MARGIN,
+                    min(format_duration or stream_duration, stream_duration) - safety_margin,
                 )
             except (TypeError, ValueError):
                 pass
@@ -132,11 +132,11 @@ def extract_audio_duration(info: dict) -> float:
                 tagged_duration = int(h) * 3600 + int(m) * 60 + float(sec)
                 return max(
                     0.0,
-                    min(format_duration or tagged_duration, tagged_duration) - MEDIA_END_SAFETY_MARGIN,
+                    min(format_duration or tagged_duration, tagged_duration) - safety_margin,
                 )
             except (TypeError, ValueError):
                 pass
-        return max(0.0, format_duration - MEDIA_END_SAFETY_MARGIN)
+        return max(0.0, format_duration - safety_margin)
     return 0.0
 
 

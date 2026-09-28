@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Release tag to upload the installer to"
         required: true
-        default: "v2.3.2"
+        default: "v2.4.0"
   push:
     tags:
       - "v*"
@@ -57,7 +57,7 @@ jobs:
 
       - name: Test backend regressions
         working-directory: backend
-        run: python -m pytest tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py -q
+        run: python -m pytest tests/test_audio_duration.py tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py -q
 
       # ── Backend → single .exe (ffmpeg + uvicorn + fastapi bundled) ───────
       - name: Build backend binary
@@ -113,7 +113,7 @@ jobs:
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --repo $env:GITHUB_REPOSITORY `
-              --title "VideoMatrix $($tag.TrimStart('v'))" `
+              --draft --title "VideoMatrix $($tag.TrimStart('v'))" `
               --notes "Self-contained Windows installer (Electron + FastAPI + ffmpeg, no Python required)."
           }
           $installer = Get-ChildItem -Path frontend/release -Filter "*.exe" | Select-Object -First 1

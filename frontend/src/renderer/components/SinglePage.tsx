@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { api, TaskStatus } from '../api/client'
 import { Checkbox } from './ui/checkbox'
 import { Slider } from './ui/slider'
 import { SubtitlePreview } from './SubtitlePreview'
 import { AssetCard } from './AssetCard'
+import { FeatureHelp } from './FeatureHelp'
 
 const RESOLUTION_PRESETS = [
   { label: '1080P', value: '1080*1920' },
@@ -93,14 +94,15 @@ function ParamRow({ label, value, suffix, onChange, placeholder, disabled = fals
 }) {
   return (
     <div className="flex items-center gap-2 h-7">
-      <label className="w-14 shrink-0 text-[11px] text-muted-foreground">{label}</label>
+      <span className="w-[74px] shrink-0 inline-flex items-center text-[11px] text-muted-foreground">{label}<FeatureHelp topic={label} /></span>
       <input
         disabled={disabled}
+        aria-label={label}
         value={String(value ?? '')}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         inputMode="decimal"
-        className="h-7 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2.5 font-mono text-[11px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70 disabled:opacity-40"
+        className="h-7 min-w-0 flex-1 rounded-[4px] border border-border/[0.10] bg-background-elev px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/55 focus:border-accent/70 disabled:opacity-40"
       />
       {suffix && <span className="w-7 shrink-0 text-[10px] text-muted-foreground">{suffix}</span>}
     </div>
@@ -144,8 +146,8 @@ function OverlapRateHelp() {
   return (
     <div ref={containerRef} className="relative ml-1 inline-flex items-center normal-case tracking-normal">
       <button type="button" aria-label="打开重叠率说明" aria-expanded={open} aria-controls="overlap-rate-help" onClick={() => setOpen((value) => !value)}
-        className="flex h-4 w-4 items-center justify-center rounded-full border border-muted-foreground/55 text-[10px] font-semibold leading-none text-muted-foreground transition-colors hover:border-accent hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent" title="重叠率说明">
-        ?
+        className="feature-help-trigger" title="重叠率说明">
+        <span className="feature-help-glyph">?</span>
       </button>
       {open && (
         <div id="overlap-rate-help" role="dialog" aria-label="重叠率说明" className="absolute left-0 top-full z-50 mt-2 w-64 rounded-[6px] border border-accent/35 bg-background p-3 text-left normal-case tracking-normal shadow-[0_14px_32px_-16px_rgba(0,0,0,0.85)]">
@@ -187,28 +189,31 @@ function ReadonlyParamRow({ label, value, suffix }: { label: string; value: stri
 
 function BodyGroupRow({ index, group, onChange, onBrowse, onOpen }: {
   index: number
-  group: { enabled: boolean; folder: string; clip_count: string | number; clip_duration: string | number }
+  group: { enabled: boolean; folder: string; clip_count: string | number; clip_duration: string | number; full_duration?: boolean }
   onChange: (patch: Partial<typeof group>) => void
   onBrowse: () => void
   onOpen: () => void
 }) {
   return (
-    <div className={`grid grid-cols-[42px_minmax(0,1fr)_54px_54px_44px] items-center gap-1 rounded-[5px] border px-1.5 py-1 ${group.enabled ? 'border-accent/28 bg-accent/[0.035]' : 'border-white/[0.07] bg-white/[0.012]'}`}>
+    <div className={`grid grid-cols-[42px_minmax(0,1fr)_54px_54px_96px] items-center gap-1 rounded-[5px] border px-1.5 py-1 ${group.enabled ? 'border-accent/28 bg-accent/[0.035]' : 'border-border/[0.07] bg-foreground/[0.012]'}`}>
       <button type="button" role="switch" aria-checked={group.enabled} onClick={() => onChange({ enabled: !group.enabled })}
-        className={`h-6 rounded-[4px] border text-[9px] font-semibold ${group.enabled ? 'border-accent/55 bg-accent/12 text-accent' : 'border-white/[0.08] text-muted-foreground'}`}>
+        className={`h-6 rounded-[4px] border text-[9px] font-semibold ${group.enabled ? 'border-accent/55 bg-accent/12 text-accent' : 'border-border/[0.08] text-muted-foreground'}`}>
         组 {index + 1}
       </button>
       <div className="flex min-w-0 items-center gap-1">
         <input value={group.folder} onChange={(e) => onChange({ folder: e.target.value })} placeholder="Body 文件夹"
-          className="h-6 min-w-0 flex-1 rounded-[4px] border border-white/[0.10] bg-[#111318] px-2 font-mono text-[10px] text-white outline-none placeholder:text-muted-foreground/55 focus:border-accent/70" />
-        <button type="button" onClick={onOpen} disabled={!group.folder} title="打开路径" className="h-6 w-6 shrink-0 rounded-[4px] border border-white/[0.08] text-[10px] text-muted-foreground hover:text-accent disabled:opacity-35">开</button>
-        <button type="button" onClick={onBrowse} className="h-6 shrink-0 rounded-[4px] border border-white/[0.08] px-1.5 text-[9px] text-foreground/85 hover:border-accent/50 hover:text-accent">浏览</button>
+          className="h-6 min-w-0 flex-1 rounded-[4px] border border-border/[0.10] bg-background-elev px-2 font-mono text-[10px] text-foreground outline-none placeholder:text-muted-foreground/55 focus:border-accent/70" />
+        <button type="button" onClick={onOpen} disabled={!group.folder} title="打开路径" className="h-6 w-6 shrink-0 rounded-[4px] border border-border/[0.08] text-[10px] text-muted-foreground hover:text-accent disabled:opacity-35">开</button>
+        <button type="button" onClick={onBrowse} className="h-6 shrink-0 rounded-[4px] border border-border/[0.08] px-1.5 text-[9px] text-foreground/85 hover:border-accent/50 hover:text-accent">浏览</button>
       </div>
       <input type="number" min="1" step="1" value={String(group.clip_count)} onChange={(e) => onChange({ clip_count: e.target.value })} inputMode="numeric" title="片段数（至少 1）" placeholder="片段"
-        className="h-6 min-w-0 rounded-[4px] border border-white/[0.10] bg-[#111318] px-1.5 text-center font-mono text-[10px] text-white outline-none focus:border-accent/70" />
-      <input type="number" min="0.5" step="0.1" value={String(group.clip_duration)} onChange={(e) => onChange({ clip_duration: e.target.value })} inputMode="decimal" title="每段时长（秒，至少 0.5）" placeholder="秒"
-        className="h-6 min-w-0 rounded-[4px] border border-white/[0.10] bg-[#111318] px-1.5 text-center font-mono text-[10px] text-white outline-none focus:border-accent/70" />
-      <span className="text-center text-[9px] text-muted-foreground">段 / 秒</span>
+        className="h-6 min-w-0 rounded-[4px] border border-border/[0.10] bg-background-elev px-1.5 text-center font-mono text-[10px] text-foreground outline-none focus:border-accent/70" />
+      <input disabled={group.full_duration} aria-label={`Body ${index + 1} 每段时长`} style={{ opacity: group.full_duration ? .4 : 1 }} type="number" min="0.5" step="0.1" value={String(group.clip_duration)} onChange={(e) => onChange({ clip_duration: e.target.value })} inputMode="decimal" title="每段时长（秒，至少 0.5）" placeholder="秒"
+        className="h-6 min-w-0 rounded-[4px] border border-border/[0.10] bg-background-elev px-1.5 text-center font-mono text-[10px] text-foreground outline-none focus:border-accent/70" />
+      <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[9px] text-foreground/85">
+        <Checkbox aria-label={`Body ${index + 1} 按原素材时长`} checked={!!group.full_duration}
+          onCheckedChange={value => onChange({ full_duration: value === true })} />按原素材时长
+      </label>
     </div>
   )
 }
@@ -244,7 +249,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
   }
   const t = tone[task.status] || tone.pending
   return (
-    <div className="flex items-center gap-2 py-1.5 border-b border-white/[0.04] last:border-0">
+    <div className="flex items-center gap-2 py-1.5 border-b border-border/[0.04] last:border-0">
       <span className={`w-8 shrink-0 text-[10px] font-mono ${t.text}`}>{t.label}</span>
       <span className="flex-1 text-[11px] text-foreground/85 truncate">{task.task_name}</span>
       {task.acceleration && task.status === 'running' && (
@@ -257,7 +262,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
       )}
       {task.total > 0 && (
         <>
-          <div className="w-20 h-px bg-white/[0.08] overflow-hidden relative">
+          <div className="w-20 h-px bg-foreground/[0.08] overflow-hidden relative">
             <div className={`absolute inset-y-0 left-0 ${t.bar} transition-all duration-500`} style={{ width: `${task.progress}%` }} />
           </div>
           <span className="text-[10px] font-mono text-muted-foreground tabular-nums w-14 text-right">
@@ -282,6 +287,71 @@ export default function SinglePage() {
   const [contactVisible, setContactVisible] = useState(false)
   const [hookRange, setHookRange] = useState<[number, number] | null>(null)
   const [hookRangeError, setHookRangeError] = useState(false)
+  const [bodyRange, setBodyRange] = useState<[number, number] | null>(null)
+  const [bodyRangeError, setBodyRangeError] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setBodyRange(null)
+    setBodyRangeError(false)
+    const specs = config.body_mode === 'grouped'
+      ? config.body_groups.filter(g => g.enabled).map(g => ({ full: g.full_duration, paths: [g.folder], count: Number(g.clip_count), duration: Number(g.clip_duration) }))
+      : [{ full: config.body_full_duration, paths: config.body_dirs.length ? config.body_dirs : [config.hook_dir], count: Number(config.total_clips) - 1, duration: Number(config.t_body) }]
+    if (!specs.some(s => s.full) || config.duration_mode === 'bgm') return
+    const timer = window.setTimeout(async () => {
+      try {
+        let min = 0, max = 0
+        for (const spec of specs) {
+          if (!spec.full) { min += spec.count * spec.duration; max += spec.count * spec.duration; continue }
+          const files = new Set<string>()
+          for (const folder of spec.paths) {
+            if (cancelled) return
+            for (const file of (await api.scanDirectory(folder)).files) files.add(file)
+          }
+          const paths = [...files], durations: number[] = []
+          for (let i = 0; i < paths.length && !cancelled; i += 4) {
+            const results = await Promise.all(paths.slice(i, i + 4).map(file => api.probeFile(file).catch(() => null)))
+            for (const r of results) if (r?.source_duration > 0) durations.push(r.source_duration)
+          }
+          durations.sort((a, b) => a - b)
+          if (durations.length < spec.count) throw new Error('素材不足')
+          min += durations.slice(0, spec.count).reduce((a, b) => a + b, 0)
+          max += durations.slice(-spec.count).reduce((a, b) => a + b, 0)
+        }
+        if (!cancelled) setBodyRange([min, max])
+      } catch { if (!cancelled) setBodyRangeError(true) }
+    }, 400)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [config.body_mode, config.body_full_duration, config.body_dirs, config.body_groups, config.hook_dir, config.total_clips, config.t_body, config.duration_mode])
+  const [bgmRange, setBgmRange] = useState<[number, number] | null>(null)
+  const [bgmRangeError, setBgmRangeError] = useState(false)
+  const previousDurationMode = useRef(config.duration_mode)
+  useEffect(() => {
+    if (previousDurationMode.current === 'bgm' && !config.bgm_dir.trim()) {
+      addToast('未选择 BGM，已恢复按片段数量生成', 'info')
+    }
+    previousDurationMode.current = config.duration_mode
+  }, [config.bgm_dir, config.duration_mode, addToast])
+  useEffect(() => {
+    let cancelled = false
+    setBgmRange(null)
+    setBgmRangeError(false)
+    if (config.duration_mode !== 'bgm' || !config.bgm_dir.trim()) return
+    const timer = window.setTimeout(async () => {
+      try {
+        const scan = await api.scanDirectory(config.bgm_dir, ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm'])
+        const durations: number[] = []
+        for (let i = 0; i < scan.files.length && !cancelled; i += 4) {
+          const results = await Promise.all(scan.files.slice(i, i + 4).map(file => api.probeFile(file).catch(() => null)))
+          for (const result of results) if (result?.audio_duration > 0) durations.push(result.audio_duration)
+        }
+        if (!cancelled) {
+          setBgmRange(durations.length ? [Math.min(...durations), Math.max(...durations)] : null)
+          setBgmRangeError(!durations.length)
+        }
+      } catch { if (!cancelled) setBgmRangeError(true) }
+    }, 400)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [config.bgm_dir, config.duration_mode])
   useEffect(() => {
     let cancelled = false
     setHookRange(null)
@@ -305,11 +375,19 @@ export default function SinglePage() {
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [config.hook_full_duration, config.hook_dir])
   const logRef = useRef<HTMLDivElement>(null)
+  const followLogsRef = useRef(true)
+  const logScrollTopRef = useRef(0)
   const taskStatusRef = useRef<Record<string, string>>({})
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [logs])
+  useLayoutEffect(() => {
+    if (!logs.length) {
+      followLogsRef.current = true
+      logScrollTopRef.current = 0
+    }
+    const panel = logRef.current
+    if (!panel) return
+    panel.scrollTop = followLogsRef.current ? panel.scrollHeight : logScrollTopRef.current
+  }, [logs, rightTab])
 
   useEffect(() => {
     document.documentElement.classList.toggle('theme-light', theme === 'light')
@@ -334,16 +412,22 @@ export default function SinglePage() {
   const subtitleYPercent = Math.max(8, Math.min(92, Number(config.subtitle_y_percent) || 92))
   const subtitleFontSizePercent = Math.max(3, Math.min(9, Number(config.subtitle_font_size_percent) || 5.6))
   const enabledBodyGroups = config.body_groups.filter((group) => group.enabled)
+  const fullBody = config.body_mode === 'grouped' ? enabledBodyGroups.some(group => group.full_duration) : !!config.body_full_duration
+  const allFullBody = config.body_mode === 'grouped' ? enabledBodyGroups.length > 0 && enabledBodyGroups.every(group => group.full_duration) : !!config.body_full_duration
   const groupedClipCount = 1 + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Math.floor(Number(group.clip_count) || 0)), 0)
   const coverFrameDuration = config.enable_random_cover && config.random_cover_mode === 'insert' ? 1 / parseFps(config.fps) : 0
-  const groupedDuration = Math.max(0, Number(config.t_hook) || 0) + enabledBodyGroups.reduce((total, group) => total + Math.max(0, Number(group.clip_count) || 0) * Math.max(0, Number(group.clip_duration) || 0), 0) + coverFrameDuration
   const bodySeconds = config.body_mode === 'grouped'
     ? enabledBodyGroups.reduce((sum, group) => sum + Number(group.clip_count || 0) * Number(group.clip_duration || 0), 0)
     : Math.max(0, Number(config.total_clips) - 1) * Number(config.t_body || 0)
-  const durationLabel = config.hook_full_duration
+  const effectiveHookRange = config.hook_full_duration ? hookRange : [Number(config.t_hook), Number(config.t_hook)]
+  const audioDurationLabel = bgmRange && effectiveHookRange
+    ? bgmRange.map((value, index) => ((config.apply_bgm_to_hook ? Math.max(value, effectiveHookRange[index]) : value + effectiveHookRange[index]) + coverFrameDuration).toFixed(3)).join('–') + 's'
+    : bgmRangeError || hookRangeError ? '时长读取失败，请预检' : '读取音频时长中…'
+  const fullBodyDurationLabel = bodyRange && effectiveHookRange ? bodyRange.map((v, i) => (v + effectiveHookRange[i] + coverFrameDuration).toFixed(3)).join('–') + 's' : bodyRangeError ? '素材不足或读取失败，请预检' : '读取原片时长中…'
+  const durationLabel = config.duration_mode === 'bgm' ? audioDurationLabel : fullBody ? fullBodyDurationLabel : config.hook_full_duration
     ? hookRange ? hookRange.map(value => (value + bodySeconds + coverFrameDuration).toFixed(coverFrameDuration ? 3 : 1)).join('–') + 's'
       : !config.hook_dir ? '请选择 Hook 目录' : hookRangeError ? '时长读取失败' : '读取时长中…'
-    : groupedDuration.toFixed(coverFrameDuration ? 3 : 1) + 's'
+    : (Number(config.t_hook) + bodySeconds + coverFrameDuration).toFixed(coverFrameDuration ? 3 : 1) + 's'
   const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
@@ -373,14 +457,14 @@ export default function SinglePage() {
   }
   const isFilePath = (value: string) => /\.(mp3|wav|m4a|aac|flac|ogg|opus|mp4|mov|mkv|avi|webm)$/i.test(value.trim())
   const ensureRunConfig = () => {
-    if (!config.hook_dir || !config.bgm_dir) {
-      addToast('请填写 Hook 和 BGM', 'warning')
+    if (!config.hook_dir) {
+      addToast('请填写 Hook', 'warning')
       return null
     }
     const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
     if (config.body_mode === 'grouped') {
       const missingFolder = enabledBodyGroups.some((group) => !group.folder.trim())
-      const invalidGroup = enabledBodyGroups.some((group) => !Number.isInteger(Number(group.clip_count)) || Number(group.clip_count) < 1 || Number(group.clip_duration) < 0.5)
+      const invalidGroup = enabledBodyGroups.some((group) => !Number.isInteger(Number(group.clip_count)) || Number(group.clip_count) < 1 || (!group.full_duration && Number(group.clip_duration) < 0.5))
       if (enabledBodyGroups.length === 0 || missingFolder || invalidGroup) {
         addToast('每个启用组需有文件夹、整数片段数和至少 0.5 秒时长', 'warning')
         return null
@@ -592,9 +676,10 @@ export default function SinglePage() {
 
       <div className="flex-1 min-h-0 px-5 pb-2 flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4 pb-1.5 mb-1.5 border-b border-white/[0.055] shrink-0">
+        <div className="flex items-center justify-between gap-4 pb-1.5 mb-1.5 border-b border-border/[0.055] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <h1 className="text-sm font-semibold text-foreground tracking-wide">VideoMatrix</h1>
+            <FeatureHelp tutorial />
             <div className="flex shrink-0 items-center gap-1.5 rounded-[4px] border border-accent/45 bg-accent px-2.5 py-1 text-[12px] font-semibold leading-none text-background shadow-[0_0_0_1px_rgba(232,166,88,0.18),0_8px_24px_-14px_rgba(232,166,88,0.9)]">
               <span>联系我</span>
               <button type="button" aria-label={contactVisible ? '隐藏微信联系方式' : '显示微信联系方式'} aria-pressed={contactVisible}
@@ -610,7 +695,7 @@ export default function SinglePage() {
             <button
               type="button"
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="h-7 rounded-[4px] border border-white/[0.10] px-2.5 text-[11px] text-foreground/85 hover:border-accent/60 hover:text-accent"
+              className="h-7 rounded-[4px] border border-border/[0.10] px-2.5 text-[11px] text-foreground/85 hover:border-accent/60 hover:text-accent"
             >
               {theme === 'dark' ? 'Light' : 'Dark'}
             </button>
@@ -632,7 +717,7 @@ export default function SinglePage() {
           <div className="flex flex-col gap-2 min-h-0 overflow-y-auto pr-1">
 
             {/* Sources — long path inputs */}
-            <Group title="素材" action={(
+            <Group title={<span>素材<FeatureHelp topic="finished" title="成品 Hook" /></span>} action={(
               <button
                 type="button"
                 onClick={toggleFinishedHookMode}
@@ -640,7 +725,7 @@ export default function SinglePage() {
                 className={`h-5 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
                   finishedHookMode
                     ? 'border-accent bg-accent text-background'
-                    : 'border-white/[0.10] bg-white/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
+                    : 'border-border/[0.10] bg-foreground/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
                 }`}
               >
                 成品 Hook
@@ -651,11 +736,11 @@ export default function SinglePage() {
                   onChange={(v) => setConfig({ hook_dir: v })}
                   onOpen={() => openConfiguredPath(config.hook_dir)}
                   onBrowse={() => browse('hook_dir')}        onClear={() => setConfig({ hook_dir: '' })} />
-                <div className="space-y-1 rounded-[6px] border border-white/[0.07] bg-white/[0.012] p-1.5">
+                <div className="space-y-1 rounded-[6px] border border-border/[0.07] bg-foreground/[0.012] p-1.5">
                   <div className="flex items-center justify-between gap-2 px-0.5">
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-foreground/85">Body 后段</span>
-                      <div className="flex items-center rounded-[4px] border border-white/[0.08] p-0.5">
+                      <span className="text-[11px] text-foreground/85">Body 后段<FeatureHelp topic="body" title="Body 分组" /></span>
+                      <div className="flex items-center rounded-[4px] border border-border/[0.08] p-0.5">
                         {(['normal', 'grouped'] as const).map((mode) => (
                           <button key={mode} type="button" onClick={() => setConfig({ body_mode: mode })}
                             className={`h-5 rounded-[3px] px-2 text-[9px] font-semibold transition-colors ${config.body_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground hover:text-accent'}`}>
@@ -673,8 +758,8 @@ export default function SinglePage() {
                       onBrowse={() => browse('body_dirs', true)} onClear={() => setConfig({ body_dirs: [] })} />
                   ) : (
                     <div className="space-y-1">
-                      <div className="grid grid-cols-[42px_minmax(0,1fr)_54px_54px_44px] gap-1 px-1.5 text-center text-[9px] text-muted-foreground">
-                        <span>开关</span><span>每组文件夹（按组顺序固定）</span><span>片段</span><span>时长</span><span />
+                      <div className="grid grid-cols-[42px_minmax(0,1fr)_54px_54px_96px] gap-1 px-1.5 text-center text-[9px] text-muted-foreground">
+                        <span>开关</span><span>每组文件夹（按组顺序固定）</span><span>片段</span><span>时长 / 秒</span><span>完整原片</span>
                       </div>
                       {config.body_groups.map((group, index) => (
                         <BodyGroupRow key={index} index={index} group={group}
@@ -686,7 +771,7 @@ export default function SinglePage() {
                     </div>
                   )}
                 </div>
-                <AssetCard kind="bgm"       label="BGM 配乐"  value={config.bgm_dir}              count={scannedFiles.bgm?.count}  required pickAction="目录"
+                <AssetCard kind="bgm"       label="BGM"  value={config.bgm_dir}              count={scannedFiles.bgm?.count} pickAction="目录"
                   onChange={(v) => setConfig({ bgm_dir: v })}
                   onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
                   onBrowse={() => browse('bgm_dir')}         secondaryAction="视频" onSecondaryAction={browseBgmVideo}
@@ -713,7 +798,7 @@ export default function SinglePage() {
                 {config.enable_srt && (
                   <div className="space-y-1 rounded-[5px] border border-accent/20 bg-accent/[0.035] px-2.5 py-1">
                     <div className="flex h-7 items-center gap-2">
-                      <span className="w-[72px] shrink-0 text-[10px] text-foreground/80">字幕位置</span>
+                      <span className="w-[88px] shrink-0 text-[10px] text-foreground/80">字幕位置<FeatureHelp topic="subtitle" title="字幕样式" /></span>
                       <div className="flex shrink-0 items-center gap-1">
                         {SUBTITLE_POSITION_PRESETS.map((preset) => {
                           const active = Math.abs(subtitleYPercent - preset.value) < 0.05
@@ -725,7 +810,7 @@ export default function SinglePage() {
                               className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
                                 active
                                   ? 'border-accent bg-accent text-background'
-                                  : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
+                                  : 'border-border/[0.08] bg-foreground/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
                               }`}
                             >
                               {preset.label}
@@ -763,7 +848,7 @@ export default function SinglePage() {
                               className={`h-6 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
                                 active
                                   ? 'border-accent bg-accent text-background'
-                                  : 'border-white/[0.08] bg-white/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
+                                  : 'border-border/[0.08] bg-foreground/[0.015] text-muted-foreground hover:border-accent/50 hover:text-accent'
                               }`}
                             >
                               {preset.label}
@@ -798,10 +883,26 @@ export default function SinglePage() {
             </Group>
 
             {/* Parameters · overlap · volume · original action rail */}
-            <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2.5 rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+            <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2.5 rounded-[6px] border border-border/[0.055] bg-foreground/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 min-w-0">
-                <Group title="参数">
+                <Group title={<span>参数<FeatureHelp topic="duration" title="时长模式" /></span>}>
                   <div className="space-y-1">
+                    <div className="flex gap-1" role="group" aria-label="时长模式">
+                      {(['clips', 'bgm'] as const).map(mode => <button key={mode} type="button"
+                        aria-pressed={config.duration_mode === mode}
+                        onClick={() => {
+                          if (mode === 'bgm' && !config.bgm_dir.trim()) {
+                            addToast('请先选择 BGM，再开启按 BGM 时长', 'warning')
+                            document.querySelector<HTMLInputElement>('input[aria-label="BGM 路径"]')?.focus()
+                            return
+                          }
+                          setConfig({ duration_mode: mode })
+                        }}
+                        className={`rounded border border-border/20 px-2 py-1 text-[10px] disabled:opacity-40 ${config.duration_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground'}`}>
+                        {mode === 'clips' ? '按片段数量' : '按 BGM 时长'}</button>)}
+                    </div>
+                    {config.duration_mode === 'bgm' && <p className="text-[10px] leading-4 text-accent">{config.apply_bgm_to_hook ? '全片按完整 BGM 时长；保留完整 Hook' : '总时长 = Hook + 完整 BGM'} · Body 自动裁尾 / 补齐</p>}
+                    {config.duration_mode === 'bgm' && <p className="text-[10px] text-accent">预计成片 {durationLabel}</p>}
                     <div className="flex items-center gap-1">
                       <div className="min-w-0 flex-1"><ParamRow label="首段" value={config.t_hook} disabled={config.hook_full_duration} onChange={(v) => setParam('t_hook', v)} /></div>
                       <span className="text-[10px] text-muted-foreground">s</span>
@@ -811,10 +912,17 @@ export default function SinglePage() {
                     </div>
                     {config.hook_full_duration && config.body_mode === 'normal' && <p className="text-[9px] text-accent">预计成片 {durationLabel}</p>}
                     {config.body_mode === 'normal' ? <>
-                      <ParamRow label="后段" value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} />
-                      <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />
+                      <div className="flex items-center gap-1">
+                        <div className="min-w-0 flex-1"><ParamRow label="后段" disabled={config.body_full_duration} value={config.t_body} suffix="s" onChange={(v) => setParam('t_body', v)} /></div>
+                        <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[9px] text-foreground/85">
+                          <Checkbox aria-label="普通 Body 按原素材时长" checked={!!config.body_full_duration}
+                            onCheckedChange={value => setConfig({ body_full_duration: value === true })} />按原素材时长
+                        </label>
+                      </div>
+                      {config.body_full_duration && config.duration_mode !== 'bgm' && <p className="text-[9px] text-accent">{durationLabel}</p>}
+                      {config.duration_mode === 'bgm' ? <ReadonlyParamRow label="片段" value="自动计算" /> : <ParamRow label="片段" value={config.total_clips} onChange={(v) => setParam('total_clips', v)} />}
                     </> : <>
-                      <ReadonlyParamRow label="总片段" value={groupedClipCount} suffix="含 Hook" />
+                      <ReadonlyParamRow label="总片段" value={config.duration_mode === 'bgm' ? '自动计算（按组循环）' : groupedClipCount} suffix="含 Hook" />
                       <ReadonlyParamRow label="总时长" value={durationLabel} />
                     </>}
                     <ParamRow label="数量" value={config.target_count} onChange={(v) => setParam('target_count', v)} />
@@ -825,16 +933,17 @@ export default function SinglePage() {
                 <Group title={<span className="inline-flex items-center">重叠率 / 音量 <OverlapRateHelp /></span>}>
                   <div className="space-y-1">
                     <ParamRow label="Hook" value={config.hook_full_duration ? 1 : config.hook_r} disabled={config.hook_full_duration} onChange={(v) => setParam('hook_r', v)} />
-                    <ParamRow label="Body" value={config.body_r} onChange={(v) => setParam('body_r', v)} />
-                    <ParamRow label="BGM-R" value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
+                    <ParamRow label="Body" disabled={allFullBody} value={config.body_r} onChange={(v) => setParam('body_r', v)} />
+                    <ParamRow label="BGM-R" disabled={!config.bgm_dir.trim() || config.duration_mode === 'bgm'} value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
                     <ParamRow label="Hook声" value={config.vol_hook_orig} suffix="%" onChange={(v) => setParam('vol_hook_orig', v)} />
                     <ParamRow label="Body声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
-                    <ParamRow label="BGM" value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
+                    <ParamRow label="BGM" disabled={!config.bgm_dir.trim()} value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
                   </div>
                 </Group>
               </div>
 
-              <div className="flex flex-col items-stretch justify-center gap-1 border-l border-white/[0.055] pl-2.5">
+              <div className="flex flex-col items-stretch justify-center gap-1 border-l border-border/[0.055] pl-2.5">
+                <span className="text-center text-[10px] text-muted-foreground">操作<FeatureHelp topic="actions" title="操作按钮" /></span>
                 <button type="button" onClick={preFlight} disabled={preflightRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:cursor-wait disabled:opacity-70">
                   {preflightRunning ? '预检中...' : '预检产能'}
                 </button>
@@ -847,7 +956,7 @@ export default function SinglePage() {
                 <button type="button" onClick={stopRunning} disabled={running === 0} className="h-8 rounded-[4px] bg-hot px-2 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
                   停止
                 </button>
-                <button type="button" onClick={benchmark} disabled={benchmarkRunning} className="mt-0.5 h-6 rounded-[4px] border border-white/[0.10] bg-white/[0.01] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
+                <button type="button" onClick={benchmark} disabled={benchmarkRunning} className="mt-0.5 h-6 rounded-[4px] border border-border/[0.10] bg-foreground/[0.01] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
                   {benchmarkRunning ? `压测中 ${benchmarkProgress}%` : '智能压测'}
                 </button>
               </div>
@@ -855,7 +964,7 @@ export default function SinglePage() {
 
             {/* Output */}
             <Group title="输出" className="flex min-h-0 flex-1 flex-col">
-              <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-white/[0.055] bg-white/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-border/[0.055] bg-foreground/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
@@ -870,7 +979,7 @@ export default function SinglePage() {
                         className={`h-7 rounded-[4px] border px-2 text-[10px] font-semibold transition-colors ${
                           config.resolution === preset.value
                             ? 'border-accent bg-accent text-background'
-                            : 'border-white/[0.10] bg-white/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
+                            : 'border-border/[0.10] bg-foreground/[0.02] text-muted-foreground hover:border-accent/60 hover:text-accent'
                         }`}
                         title={`9:16 ${preset.value}`}
                       >
@@ -879,19 +988,22 @@ export default function SinglePage() {
                     ))}
                   </div>
                 </div>
-                <ParamRow label="码率" value={config.bitrate} placeholder="5000k" onChange={(v) => setConfig({ bitrate: v })} />
+                <ParamRow label="码率" value={config.bitrate} placeholder="8000k" onChange={(v) => setConfig({ bitrate: v })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-2">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox checked={config.enable_gpu} onCheckedChange={(v) => setConfig({ enable_gpu: v as boolean })} />
                     <span className="text-[11px] text-foreground/85">GPU</span>
                   </label>
+                  <FeatureHelp topic="gpu" title="GPU 加速" />
                   <label className="flex items-center gap-1.5 cursor-pointer" title="从成品随机抽帧并缩放裁切，可替换首帧或插入一帧；开启后会增加编码耗时。">
                     <Checkbox checked={config.enable_random_cover} onCheckedChange={(v) => setConfig({ enable_random_cover: v as boolean })} />
                     <span className="text-[11px] text-foreground/85">随机首帧</span>
+                    <span className="text-[9px] text-hot">建议打开</span>
                   </label>
+                  <FeatureHelp topic="cover" title="随机首帧" />
                   {config.enable_random_cover && (
-                    <div className="flex items-center rounded-[4px] border border-white/[0.08] p-0.5">
+                    <div className="flex items-center rounded-[4px] border border-border/[0.08] p-0.5">
                       {([['replace', '替换首帧'], ['insert', '插入一帧']] as const).map(([mode, label]) => (
                         <button key={mode} type="button" onClick={() => setConfig({ random_cover_mode: mode })}
                           className={`h-5 rounded-[3px] px-1.5 text-[9px] font-semibold ${config.random_cover_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground hover:text-accent'}`}>
@@ -908,9 +1020,9 @@ export default function SinglePage() {
           </div>
 
           {/* ─── RIGHT: telemetry panel ─── */}
-          <div className="flex flex-col min-h-0 rounded-[6px] border border-white/[0.07] bg-white/[0.018] shadow-[0_8px_32px_-18px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.035)] overflow-hidden">
+          <div className="flex flex-col min-h-0 rounded-[6px] border border-border/[0.07] bg-foreground/[0.018] shadow-[0_8px_32px_-18px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.035)] overflow-hidden">
             {/* Tab strip */}
-            <div className="flex items-center border-b border-white/[0.06] px-3 shrink-0">
+            <div className="flex items-center border-b border-border/[0.06] px-3 shrink-0">
               {([
                 { k: 'log',    label: '日志', count: logs.length },
                 { k: 'tasks',  label: '任务', count: tasks.length },
@@ -943,7 +1055,11 @@ export default function SinglePage() {
             <div className="flex-1 min-h-0 relative">
               {/* LOG */}
               {rightTab === 'log' && (
-                <div ref={logRef} className="absolute inset-0 overflow-auto px-4 py-3 font-mono text-[11.5px] leading-[1.65] bg-black/25">
+                <div ref={logRef} aria-label="运行日志" onScroll={event => {
+                  const panel = event.currentTarget
+                  logScrollTopRef.current = panel.scrollTop
+                  followLogsRef.current = panel.scrollHeight - panel.clientHeight - panel.scrollTop <= 8
+                }} className="absolute inset-0 overflow-auto px-4 py-3 font-mono text-[11.5px] leading-[1.65] bg-background/70">
                   {logs.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-muted-foreground/60 text-[12px]">
                       暂无日志
@@ -973,7 +1089,7 @@ export default function SinglePage() {
 
               {/* TASKS */}
               {rightTab === 'tasks' && (
-                <div className="absolute inset-0 overflow-auto px-4 py-2 bg-black/25">
+                <div className="absolute inset-0 overflow-auto px-4 py-2 bg-background/70">
                   {tasks.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-muted-foreground/60 text-[12px]">
                       暂无任务
@@ -986,14 +1102,14 @@ export default function SinglePage() {
 
               {/* OUTPUT */}
               {rightTab === 'output' && (
-                <div className="absolute inset-0 overflow-auto px-4 py-2 bg-black/25">
+                <div className="absolute inset-0 overflow-auto px-4 py-2 bg-background/70">
                   {allOutputItems.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-muted-foreground/60 text-[12px]">
                       暂无产出
                     </div>
                   ) : (
                     allOutputItems.map(({ file: f, elapsed }, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-white/[0.04] last:border-0">
+                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/[0.04] last:border-0">
                         <span className="text-[10px] text-muted-foreground font-mono tabular-nums w-6">
                           {String(i + 1).padStart(2, '0')}
                         </span>
@@ -1019,10 +1135,10 @@ export default function SinglePage() {
 
               {/* OUTPUT TRANSFORMER */}
               {rightTab === 'variant' && (
-                <div className="absolute inset-0 bg-black/25 px-5 py-5">
-                  <div className="flex items-center justify-between border-b border-white/[0.06] pb-4">
+                <div className="absolute inset-0 bg-background/70 px-5 py-5">
+                  <div className="flex items-center justify-between border-b border-border/[0.06] pb-4">
                     <div>
-                      <div className="text-[13px] font-semibold text-foreground">成品去重变换</div>
+                      <div className="text-[13px] font-semibold text-foreground">成品去重变换<FeatureHelp topic="variants" title="成品变换" /></div>
                       <div className="mt-1 font-mono text-[10px] text-muted-foreground">OUTPUT TRANSFORMER V1</div>
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -1043,13 +1159,13 @@ export default function SinglePage() {
                   </div>
 
                   <div className={`space-y-5 pt-5 transition-opacity ${config.enable_variants ? 'opacity-100' : 'pointer-events-none opacity-40'}`}>
-                    <div className="rounded-[5px] border border-white/[0.08] bg-white/[0.02] px-3 py-3 text-[11px] leading-5 text-foreground/80">
+                    <div className="rounded-[5px] border border-border/[0.08] bg-foreground/[0.02] px-3 py-3 text-[11px] leading-5 text-foreground/80">
                       混剪完成后自动处理最终成品。关闭时不增加任何处理步骤，也不会修改 Hook、Body 等源素材。
                     </div>
 
                     <div>
                       <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">强度</div>
-                      <div className="grid grid-cols-3 gap-1 rounded-[5px] border border-white/[0.08] bg-white/[0.02] p-1">
+                      <div className="grid grid-cols-3 gap-1 rounded-[5px] border border-border/[0.08] bg-foreground/[0.02] p-1">
                         {([
                           { value: 'mild', label: VARIANT_STRENGTH_INFO.mild.label },
                           { value: 'balanced', label: VARIANT_STRENGTH_INFO.balanced.label },
@@ -1065,7 +1181,7 @@ export default function SinglePage() {
                             className={`h-8 rounded-[3px] text-[11px] font-semibold transition-colors ${
                               config.variant_strength === item.value
                                 ? 'bg-accent text-background'
-                                : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground'
+                                : 'text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground'
                             }`}
                           >
                             {item.label}
@@ -1080,7 +1196,7 @@ export default function SinglePage() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-white/[0.06] pt-4 font-mono text-[10px]">
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-border/[0.06] pt-4 font-mono text-[10px]">
                       <div className="flex justify-between"><span className="text-muted-foreground">处理对象</span><span className="text-accent">最终成品</span></div>
                       <div className="flex justify-between"><span className="text-muted-foreground">源素材</span><span className="text-ok">不修改</span></div>
                       <div className="flex justify-between"><span className="text-muted-foreground">输出规格</span><span className="text-ok">保持</span></div>
@@ -1095,7 +1211,7 @@ export default function SinglePage() {
       </div>
 
       {completionNotice && (
-        <div className="fixed left-1/2 top-16 z-[1200] -translate-x-1/2 rounded-[6px] border border-ok/50 bg-[#10180f] px-7 py-4 text-center shadow-[0_20px_60px_-20px_rgba(155,214,107,0.8)]">
+        <div className="fixed left-1/2 top-16 z-[1200] -translate-x-1/2 rounded-[6px] border border-ok/50 bg-background-elev px-7 py-4 text-center shadow-[0_20px_60px_-20px_rgba(155,214,107,0.8)]">
           <div className="text-[16px] font-semibold text-ok">任务完成</div>
           <div className="mt-1 max-w-[520px] truncate text-[12px] text-foreground/80">{completionNotice}</div>
         </div>

@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --ui-scale: 1.15;
     --color-background: 7 8 12;
     --color-background-elev: 14 15 20;
@@ -19,6 +20,7 @@
   }
 
   :root.theme-light {
+    color-scheme: light;
     --color-background: 244 245 247;
     --color-background-elev: 255 255 255;
     --color-foreground: 25 28 34;
@@ -109,3 +111,19 @@
 
 .animate-spin-slow { animation: spin 1s linear infinite; }
 .animate-pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
+
+.feature-help-trigger { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 1px; color: rgb(var(--color-muted-foreground)); cursor: pointer; flex-shrink: 0; }
+.feature-help-glyph { display: inline-flex; align-items: center; justify-content: center; width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 50%; font-size: 7px; line-height: 1; }
+.feature-help-trigger:hover { color: rgb(var(--color-accent)); border-color: currentColor; }
+.tutorial-trigger { border: 1px solid rgb(var(--color-border) / .2); border-radius: 4px; padding: 5px 9px; font-size: 11px; color: rgb(var(--color-foreground)); }
+.feature-help-dialog { width: min(350px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; border: 1px solid rgb(var(--color-accent) / .4); border-radius: 8px; padding: 16px; background: rgb(var(--color-background-elev)); color: rgb(var(--color-foreground)); box-shadow: 0 12px 40px #0005; font-size: 13px; line-height: 1.75; }
+.feature-help-dialog::backdrop { background: rgb(0 0 0 / .25); }
+.tutorial-dialog { width: min(600px, calc(100vw - 24px)); }
+.tutorial-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.help-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.help-heading h2, .tutorial-content h3 { font-weight: 600; }
+.help-heading button { font-size: 12px; padding: 3px 8px; border: 1px solid rgb(var(--color-border) / .2); border-radius: 4px; }
+.tutorial-content section + section { margin-top: 16px; }
+.tutorial-content p { color: rgb(var(--color-muted-foreground)); }
+.feature-help-trigger:focus-visible, .tutorial-trigger:focus-visible, .feature-help-dialog button:focus-visible { outline: 2px solid rgb(var(--color-accent)); outline-offset: 3px; }
+:root.theme-light ::-webkit-scrollbar-thumb { background: rgb(20 24 32 / .2); }

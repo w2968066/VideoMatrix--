@@ -47,7 +47,8 @@ class RuntimeStartupTests(unittest.TestCase):
                         if time.monotonic() > deadline:
                             raise
                         time.sleep(0.1)
-                self.assertEqual(health['version'], '2.3.2')
+                expected_version = json.loads((Path(__file__).resolve().parents[2] / 'frontend' / 'package.json').read_text(encoding='utf-8'))['version']
+                self.assertEqual(health['version'], expected_version)
                 self.assertEqual(health['instance'], 'startup-test')
                 process.stdin.close()
                 self.assertEqual(process.wait(timeout=10), 0)
