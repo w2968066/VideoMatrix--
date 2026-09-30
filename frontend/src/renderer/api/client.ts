@@ -11,6 +11,8 @@ function formatApiError(detail: unknown, fallback: string): string {
     hook_r: 'Hook 重叠率', body_r: 'Body 重叠率', bgm_r: 'BGM 重叠率',
     t_hook: '首段时长', t_body: '后段时长', total_clips: '片段数',
     target_count: '生成数量', concurrent_tasks: '并发数', vol_hook_orig: 'Hook 原声音量',
+    full: '全片 BGM', hook: 'Hook BGM', body: 'Body BGM',
+    volume: '音量', fade_in: '渐入秒数', fade_out: '渐出秒数', overlap: '裁切重叠率', path: '配乐路径',
   }
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
@@ -19,7 +21,8 @@ function formatApiError(detail: unknown, fallback: string): string {
         if (!item || typeof item !== 'object') return null
         const error = item as { loc?: unknown[]; msg?: string }
         const field = error.loc?.at(-1)
-        const label = field ? fieldLabels[String(field)] || String(field) : ''
+        const scope = error.loc?.includes('bgm_tracks') ? error.loc.find(value => ['full', 'hook', 'body'].includes(String(value))) : null
+        const label = (scope ? `${fieldLabels[String(scope)]} ` : '') + (field ? fieldLabels[String(field)] || String(field) : '')
         return label && error.msg ? `${label}：${error.msg}` : error.msg
       })
       .filter((message): message is string => Boolean(message))
@@ -49,6 +52,19 @@ export interface BodyGroup {
   clip_duration: string | number
 }
 
+export type BgmScope = 'full' | 'hook' | 'body'
+export interface BgmTrack {
+  enabled: boolean
+  path: string
+  volume: string | number
+  fade_in: string | number
+  fade_out: string | number
+  short_behavior: 'loop' | 'stop'
+  source_mode: 'start' | 'random'
+  overlap: string | number
+}
+export type BgmTracks = Record<BgmScope, BgmTrack>
+
 export interface VideoConfig {
   task_name: string
   hook_dir: string
@@ -56,6 +72,8 @@ export interface VideoConfig {
   body_mode: 'normal' | 'grouped'
   body_groups: BodyGroup[]
   bgm_dir: string
+  bgm_tracks?: BgmTracks
+  finished_hook?: boolean
   duration_mode: 'clips' | 'bgm'
   voice_dir?: string
   srt_dir?: string
@@ -147,6 +165,20 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
     normalized.hook_r = 1
   }
   normalized.random_cover_mode = config.random_cover_mode === 'insert' ? 'insert' : 'replace'
+  if (config.bgm_tracks) {
+    normalized.bgm_tracks = Object.fromEntries(Object.entries(config.bgm_tracks).map(([scope, track]) => {
+      const inactive = !track.enabled || !track.path.trim()
+      return [scope, { ...track, path: track.path.trim(),
+        volume: inactive ? 30 : numberIfValid(track.volume),
+        fade_in: inactive ? 0 : numberIfValid(track.fade_in),
+        fade_out: inactive ? 0 : numberIfValid(track.fade_out),
+        overlap: inactive || (scope === 'full' && config.duration_mode === 'bgm') || track.source_mode !== 'random' ? .3 : numberIfValid(track.overlap),
+      }]
+    })) as BgmTracks
+    const full = normalized.bgm_tracks.full
+    normalized.bgm_dir = full.enabled ? full.path : ''
+    normalized.apply_bgm_to_hook = true
+  }
   return normalized
 }
 

@@ -3,6 +3,23 @@ from typing import Dict, List, Optional, Literal, Union
 from datetime import datetime
 
 
+class BgmTrack(BaseModel):
+    enabled: bool = True
+    path: str = ""
+    volume: float = Field(default=30, ge=0, le=200)
+    fade_in: float = Field(default=0, ge=0, le=3600)
+    fade_out: float = Field(default=0, ge=0, le=3600)
+    short_behavior: Literal["loop", "stop"] = "loop"
+    source_mode: Literal["start", "random"] = "start"
+    overlap: float = Field(default=0.3, ge=0, le=1)
+
+
+class BgmTracks(BaseModel):
+    full: BgmTrack = Field(default_factory=BgmTrack)
+    hook: BgmTrack = Field(default_factory=lambda: BgmTrack(enabled=False))
+    body: BgmTrack = Field(default_factory=lambda: BgmTrack(enabled=False))
+
+
 class VideoConfig(BaseModel):
     task_name: str = Field(default="Task", description="任务名称")
     hook_dir: str = Field(..., description="首段素材目录")
@@ -10,6 +27,7 @@ class VideoConfig(BaseModel):
     body_mode: Literal["normal", "grouped"] = Field(default="normal", description="后段拼接模式")
     body_groups: List["BodyGroup"] = Field(default_factory=list, max_length=4, description="按顺序拼接的 Body 分组")
     bgm_dir: str = Field(default="", description="可选 BGM 目录或带音轨的视频文件")
+    bgm_tracks: Optional[BgmTracks] = Field(default=None, description="全片 / Hook / Body 三条独立配乐；未提供时兼容旧接口")
     duration_mode: Literal["clips", "bgm"] = Field(default="clips", description="按片段数量或完整 BGM 时长生成")
     voice_dir: Optional[str] = Field(default=None, description="配音目录")
     srt_dir: Optional[str] = Field(default=None, description="字幕目录")

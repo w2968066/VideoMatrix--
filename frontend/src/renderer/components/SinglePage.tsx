@@ -1,11 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useStore } from '../store'
-import { api, TaskStatus } from '../api/client'
+import { api, TaskStatus, BgmScope, BgmTrack } from '../api/client'
 import { Checkbox } from './ui/checkbox'
 import { Slider } from './ui/slider'
 import { SubtitlePreview } from './SubtitlePreview'
 import { AssetCard } from './AssetCard'
 import { FeatureHelp } from './FeatureHelp'
+import { BgmPanel } from './BgmPanel'
+import { useDirectoryPicker } from './DirectoryPicker'
 
 const RESOLUTION_PRESETS = [
   { label: '1080P', value: '1080*1920' },
@@ -276,6 +278,7 @@ function TaskRow({ task }: { task: TaskStatus }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function SinglePage() {
+  const { openDirectory, directoryPicker } = useDirectoryPicker()
   const { config, setConfig, tasks, logs, appendLog, clearLogs, addToast, scannedFiles } = useStore()
   const [isRunning, setIsRunning] = useState(false)
   const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output' | 'variant'>('log')
@@ -326,8 +329,16 @@ export default function SinglePage() {
   const [bgmRangeError, setBgmRangeError] = useState(false)
   const previousDurationMode = useRef(config.duration_mode)
   useEffect(() => {
+    const notice = localStorage.getItem('vm-bgm-migration-notice')
+    if (notice) {
+      addToast(notice, 'info')
+      appendLog(`[设置迁移] ${notice}`)
+      localStorage.removeItem('vm-bgm-migration-notice')
+    }
+  }, [addToast, appendLog])
+  useEffect(() => {
     if (previousDurationMode.current === 'bgm' && !config.bgm_dir.trim()) {
-      addToast('未选择 BGM，已恢复按片段数量生成', 'info')
+      addToast('全片 BGM 已清空或关闭，已恢复按片段数量生成', 'info')
     }
     previousDurationMode.current = config.duration_mode
   }, [config.bgm_dir, config.duration_mode, addToast])
@@ -421,14 +432,14 @@ export default function SinglePage() {
     : Math.max(0, Number(config.total_clips) - 1) * Number(config.t_body || 0)
   const effectiveHookRange = config.hook_full_duration ? hookRange : [Number(config.t_hook), Number(config.t_hook)]
   const audioDurationLabel = bgmRange && effectiveHookRange
-    ? bgmRange.map((value, index) => ((config.apply_bgm_to_hook ? Math.max(value, effectiveHookRange[index]) : value + effectiveHookRange[index]) + coverFrameDuration).toFixed(3)).join('–') + 's'
+    ? bgmRange.map((value, index) => (Math.max(value, effectiveHookRange[index]) + coverFrameDuration).toFixed(3)).join('–') + 's'
     : bgmRangeError || hookRangeError ? '时长读取失败，请预检' : '读取音频时长中…'
   const fullBodyDurationLabel = bodyRange && effectiveHookRange ? bodyRange.map((v, i) => (v + effectiveHookRange[i] + coverFrameDuration).toFixed(3)).join('–') + 's' : bodyRangeError ? '素材不足或读取失败，请预检' : '读取原片时长中…'
   const durationLabel = config.duration_mode === 'bgm' ? audioDurationLabel : fullBody ? fullBodyDurationLabel : config.hook_full_duration
     ? hookRange ? hookRange.map(value => (value + bodySeconds + coverFrameDuration).toFixed(coverFrameDuration ? 3 : 1)).join('–') + 's'
       : !config.hook_dir ? '请选择 Hook 目录' : hookRangeError ? '时长读取失败' : '读取时长中…'
     : (Number(config.t_hook) + bodySeconds + coverFrameDuration).toFixed(coverFrameDuration ? 3 : 1) + 's'
-  const finishedHookMode = !config.apply_bgm_to_hook && !config.apply_voice_to_hook && !config.apply_srt_to_hook && !config.apply_watermark_to_hook
+  const finishedHookMode = Boolean(config.finished_hook)
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
     elapsed: t.output_elapsed?.[file],
@@ -437,7 +448,7 @@ export default function SinglePage() {
   const toggleFinishedHookMode = () => {
     const enabled = !finishedHookMode
     setConfig({
-      apply_bgm_to_hook: !enabled,
+      finished_hook: enabled,
       apply_voice_to_hook: !enabled,
       apply_srt_to_hook: !enabled,
       apply_watermark_to_hook: !enabled,
@@ -490,7 +501,7 @@ export default function SinglePage() {
     const currentPath = key === 'body_dirs'
       ? config.body_dirs.join(';')
       : String(config[key as keyof typeof config] || '')
-    const selected = await window.electronAPI.openDirectory(
+    const selected = await openDirectory(
       browseStartDirectory(key, currentPath, isFilePath(currentPath)),
       multi,
     )
@@ -529,7 +540,7 @@ export default function SinglePage() {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
     const group = config.body_groups[index]
     const key = `body_group_${index}`
-    const selected = await window.electronAPI.openDirectory(browseStartDirectory(key, group.folder), false)
+    const selected = await openDirectory(browseStartDirectory(key, group.folder), false)
     if (!selected || Array.isArray(selected)) return
     rememberBrowseDirectory(key, selected)
     updateBodyGroup(index, { folder: selected })
@@ -548,19 +559,20 @@ export default function SinglePage() {
     }
   }
 
-  const browseBgmVideo = async () => {
+  const updateBgmTrack = (scope: BgmScope, patch: Partial<BgmTrack>) => {
+    const tracks = config.bgm_tracks!
+    setConfig({ bgm_tracks: { ...tracks, [scope]: { ...tracks[scope], ...patch } } })
+  }
+  const browseBgmTrack = async (scope: BgmScope, file: boolean) => {
     if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
-    const selectedPath = await window.electronAPI.openFile(
-      [{
-        name: '带声音的视频',
-        extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm'],
-      }],
-      browseStartDirectory('bgm_dir', config.bgm_dir, isFilePath(config.bgm_dir)),
-    )
-    if (selectedPath) {
-      rememberBrowseDirectory('bgm_dir', selectedPath, true)
-      setConfig({ bgm_dir: selectedPath })
-      addToast('已选择视频音轨作为 BGM', 'success')
+    const key = `bgm_${scope}`, path = config.bgm_tracks![scope].path
+    const start = browseStartDirectory(key, path, isFilePath(path))
+    const selected = file ? await window.electronAPI.openFile([
+      { name: '音频或带声音的视频', extensions: ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'mkv', 'avi', 'webm'] },
+    ], start) : await openDirectory(start, false)
+    if (selected && !Array.isArray(selected)) {
+      rememberBrowseDirectory(key, selected, file)
+      updateBgmTrack(scope, { path: selected, enabled: true })
     }
   }
 
@@ -671,6 +683,7 @@ export default function SinglePage() {
 
   return (
     <div className="ui-shell flex flex-col overflow-hidden">
+      {directoryPicker}
       {/* macOS hidden-titlebar drag region */}
       <div className="h-3 w-full shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
@@ -721,7 +734,8 @@ export default function SinglePage() {
               <button
                 type="button"
                 onClick={toggleFinishedHookMode}
-                title="关闭 BGM、配音、字幕、水印对 Hook 的二次处理，并将 Hook 原声设为 100%"
+                title="配音、字幕、水印默认仅用于 Body，Hook 原声设为 100%；已配置的三轨配乐保持不变"
+                aria-pressed={finishedHookMode}
                 className={`h-5 rounded-[4px] border px-2 text-[9px] font-semibold transition-colors ${
                   finishedHookMode
                     ? 'border-accent bg-accent text-background'
@@ -771,12 +785,9 @@ export default function SinglePage() {
                     </div>
                   )}
                 </div>
-                <AssetCard kind="bgm"       label="BGM"  value={config.bgm_dir}              count={scannedFiles.bgm?.count} pickAction="目录"
-                  onChange={(v) => setConfig({ bgm_dir: v })}
-                  onOpen={() => openConfiguredPath(config.bgm_dir, isFilePath(config.bgm_dir))}
-                  onBrowse={() => browse('bgm_dir')}         secondaryAction="视频" onSecondaryAction={browseBgmVideo}
-                  bodyOnly={!config.apply_bgm_to_hook} onBodyOnlyChange={(v) => setConfig({ apply_bgm_to_hook: !v })}
-                  onClear={() => setConfig({ bgm_dir: '' })} />
+                <BgmPanel tracks={config.bgm_tracks!} audioMode={config.duration_mode === 'bgm'}
+                  onChange={updateBgmTrack} onBrowse={browseBgmTrack}
+                  onOpen={path => openConfiguredPath(path, isFilePath(path))} />
                 <AssetCard kind="voice"     label="配音"      value={config.voice_dir || ''}
                   onChange={(v) => setConfig({ voice_dir: v })}
                   onOpen={() => openConfiguredPath(config.voice_dir || '')}
@@ -892,16 +903,16 @@ export default function SinglePage() {
                         aria-pressed={config.duration_mode === mode}
                         onClick={() => {
                           if (mode === 'bgm' && !config.bgm_dir.trim()) {
-                            addToast('请先选择 BGM，再开启按 BGM 时长', 'warning')
-                            document.querySelector<HTMLInputElement>('input[aria-label="BGM 路径"]')?.focus()
+                            addToast('请先选择并启用全片 BGM，再开启按全片 BGM 时长', 'warning')
+                            document.querySelector<HTMLInputElement>('input[aria-label="全片 BGM 路径"]')?.focus()
                             return
                           }
                           setConfig({ duration_mode: mode })
                         }}
                         className={`rounded border border-border/20 px-2 py-1 text-[10px] disabled:opacity-40 ${config.duration_mode === mode ? 'bg-accent text-background' : 'text-muted-foreground'}`}>
-                        {mode === 'clips' ? '按片段数量' : '按 BGM 时长'}</button>)}
+                        {mode === 'clips' ? '按片段数量' : '按全片 BGM 时长'}</button>)}
                     </div>
-                    {config.duration_mode === 'bgm' && <p className="text-[10px] leading-4 text-accent">{config.apply_bgm_to_hook ? '全片按完整 BGM 时长；保留完整 Hook' : '总时长 = Hook + 完整 BGM'} · Body 自动裁尾 / 补齐</p>}
+                    {config.duration_mode === 'bgm' && <p className="text-[10px] leading-4 text-accent">按完整全片 BGM 时长；保留完整 Hook · Body 自动裁尾 / 补齐</p>}
                     {config.duration_mode === 'bgm' && <p className="text-[10px] text-accent">预计成片 {durationLabel}</p>}
                     <div className="flex items-center gap-1">
                       <div className="min-w-0 flex-1"><ParamRow label="首段" value={config.t_hook} disabled={config.hook_full_duration} onChange={(v) => setParam('t_hook', v)} /></div>
@@ -934,10 +945,8 @@ export default function SinglePage() {
                   <div className="space-y-1">
                     <ParamRow label="Hook" value={config.hook_full_duration ? 1 : config.hook_r} disabled={config.hook_full_duration} onChange={(v) => setParam('hook_r', v)} />
                     <ParamRow label="Body" disabled={allFullBody} value={config.body_r} onChange={(v) => setParam('body_r', v)} />
-                    <ParamRow label="BGM-R" disabled={!config.bgm_dir.trim() || config.duration_mode === 'bgm'} value={config.bgm_r} onChange={(v) => setParam('bgm_r', v)} />
                     <ParamRow label="Hook声" value={config.vol_hook_orig} suffix="%" onChange={(v) => setParam('vol_hook_orig', v)} />
                     <ParamRow label="Body声" value={config.vol_orig} suffix="%" onChange={(v) => setParam('vol_orig', v)} />
-                    <ParamRow label="BGM" disabled={!config.bgm_dir.trim()} value={config.vol_bgm} suffix="%" onChange={(v) => setParam('vol_bgm', v)} />
                   </div>
                 </Group>
               </div>

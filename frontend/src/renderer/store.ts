@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { TaskStatus, VideoConfig } from './api/client'
 import { ToastItem } from './components/animation/Toast'
 import { collectTaskLogs } from './taskLogs'
+import { defaultBgmTrack, migrateBgmConfig } from './bgmConfig'
 
 type Page = 'dashboard' | 'sources' | 'mix' | 'queue' | 'output'
 
@@ -43,6 +44,8 @@ const defaultConfig: VideoConfig = {
   body_mode: 'normal',
   body_groups: Array.from({ length: 4 }, (_, index) => ({ enabled: index === 0, folder: '', clip_count: 1, clip_duration: 3 })),
   bgm_dir: '',
+  bgm_tracks: { full: defaultBgmTrack(), hook: defaultBgmTrack(false), body: defaultBgmTrack(false) },
+  finished_hook: false,
   duration_mode: 'clips',
   voice_dir: '',
   srt_dir: '',
@@ -89,10 +92,14 @@ function loadSavedConfig(): VideoConfig {
     const raw = localStorage.getItem('vm-config')
     if (!raw) return { ...defaultConfig }
     const saved = JSON.parse(raw)
-    return {
+    const migration = migrateBgmConfig(saved)
+    const config: VideoConfig = {
       ...defaultConfig,
       ...saved,
-      duration_mode: saved.bgm_dir?.trim() && saved.duration_mode === 'bgm' ? 'bgm' : 'clips',
+      bgm_tracks: migration.tracks,
+      bgm_dir: migration.tracks.full.enabled ? migration.tracks.full.path : '',
+      duration_mode: migration.durationMode,
+      finished_hook: saved.finished_hook ?? (!saved.apply_bgm_to_hook && !saved.apply_voice_to_hook && !saved.apply_srt_to_hook && !saved.apply_watermark_to_hook),
       body_mode: saved.body_mode === 'grouped' ? 'grouped' : 'normal',
       body_groups: Array.from({ length: 4 }, (_, index) => ({
         ...defaultConfig.body_groups[index],
@@ -108,6 +115,11 @@ function loadSavedConfig(): VideoConfig {
       variant_mirror: false,
       variant_frame_mix: true,
     }
+    if (!saved.bgm_tracks) {
+      localStorage.setItem('vm-config', JSON.stringify(config))
+      if (migration.notice) localStorage.setItem('vm-bgm-migration-notice', migration.notice)
+    }
+    return config
   } catch {
     return { ...defaultConfig }
   }
@@ -123,6 +135,19 @@ export const useStore = create<AppState>((set) => ({
   setConfig: (partial) =>
     set((state) => {
       const config = { ...state.config, ...partial }
+      if (config.bgm_tracks) {
+        // Keep legacy display/probing fields mirrored from the full track.
+        // Never infer a music scope from the finished-Hook preset.
+        const tracks = { ...config.bgm_tracks }
+        if (partial.bgm_dir !== undefined && !partial.bgm_tracks) tracks.full = { ...tracks.full, path: partial.bgm_dir }
+        if (partial.vol_bgm !== undefined && !partial.bgm_tracks) tracks.full = { ...tracks.full, volume: partial.vol_bgm }
+        if (partial.bgm_r !== undefined && !partial.bgm_tracks) tracks.full = { ...tracks.full, overlap: partial.bgm_r }
+        config.bgm_tracks = tracks
+        config.bgm_dir = tracks.full.enabled ? tracks.full.path : ''
+        config.vol_bgm = tracks.full.volume
+        config.bgm_r = tracks.full.overlap
+        config.apply_bgm_to_hook = true
+      }
       if (!config.bgm_dir.trim()) config.duration_mode = 'clips'
       localStorage.setItem('vm-config', JSON.stringify(config))
       return { config }

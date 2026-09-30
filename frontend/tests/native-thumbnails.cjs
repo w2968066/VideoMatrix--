@@ -1,0 +1,27 @@
+// Run with Electron after creating dist/thumbnail-fixture.mp4 (test media only).
+const { app, nativeImage } = require('electron')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const Module = require('node:module')
+const esbuild = require('esbuild')
+
+app.whenReady().then(async () => {
+  const source = path.resolve(__dirname, '../src/main/nativeThumbnails.ts')
+  const build = esbuild.buildSync({ entryPoints: [source], bundle: true, platform: 'node', format: 'cjs', write: false })
+  const mod = new Module(source, module)
+  mod._compile(build.outputFiles[0].text, source)
+  const read = mod.exports.createThumbnailReader(async file => {
+    const image = await nativeImage.createThumbnailFromPath(file, { width: 192, height: 128 })
+    assert(!image.isEmpty(), `Empty OS thumbnail: ${file}`)
+    return image.resize({ width: 192 }).toDataURL()
+  })
+  const video = await read(path.resolve(__dirname, '../dist/thumbnail-fixture.mp4'))
+  const image = await read(path.resolve(__dirname, '../public/icon.png'))
+  assert(video?.startsWith('data:image/png;base64,'))
+  assert(image?.startsWith('data:image/png;base64,'))
+  fs.writeFileSync(path.resolve(__dirname, '../dist/native-thumbnail-results.json'), JSON.stringify({ video, image }))
+  fs.writeFileSync(path.resolve(__dirname, '../dist/native-video-thumbnail.png'), nativeImage.createFromDataURL(video).toPNG())
+  console.log('Native video/image thumbnail smoke passed')
+  app.exit(0)
+}).catch(error => { console.error(error); app.exit(1) })

@@ -1,10 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage, clipboard } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
 import { randomUUID } from 'crypto'
 import { validateIdentity } from './backendHandshake'
+import { listDirectory, createDirectory } from './directoryBrowser'
+import { createThumbnailReader } from './nativeThumbnails'
+import { createDirectoryActions } from './directoryActions'
+import type { DirectoryAction } from '../shared/directory'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
@@ -324,6 +328,118 @@ function resolveDialogDefaultPath(rawPath?: string): string | undefined {
 }
 
 // IPC 处理器
+async function assertFilesystemIdle() {
+  if (!backendVerified) throw new Error('无法确认混剪任务状态，暂不允许删除或改名。')
+  let tasks: any
+  try {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/tasks`, { signal: AbortSignal.timeout(2500) })
+    if (!response.ok) throw new Error()
+    tasks = await response.json()
+  } catch { throw new Error('无法确认混剪任务状态，暂不允许删除或改名。') }
+  if (!Array.isArray(tasks)) throw new Error('混剪任务状态异常，暂不允许删除或改名。')
+  if (tasks.some(task => task.status === 'running' || task.status === 'pending')) throw new Error('有混剪任务正在运行或排队，请完成或停止任务后再删除、改名。')
+}
+const directoryActions = createDirectoryActions({
+  assertIdle: assertFilesystemIdle,
+  protectedPaths: [os.homedir(), app.getAppPath(), process.resourcesPath, path.dirname(runtimeFile), app.getPath('userData')],
+  trashItem: file => shell.trashItem(file),
+  confirmTrash: async (paths, folders) => {
+    if (!mainWindow) return false
+    const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: '移入回收站',
+      message: `将 ${paths.length - folders} 个文件、${folders} 个文件夹移入系统回收站？`,
+      detail: `文件夹内的内容也会一起移入回收站；链接仅移除链接本身。可从系统回收站恢复；不会永久删除。\n\n${paths.join('\n')}`,
+      buttons: ['取消', '移入回收站'], defaultId: 0, cancelId: 0, noLink: true })
+    return result.response === 1
+  },
+})
+function assertDirectorySender(event: Electron.IpcMainInvokeEvent) {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('无法访问文件管理功能。')
+}
+ipcMain.handle('directory:rename', async (event, parent: string, item: string, name: string) => {
+  assertDirectorySender(event)
+  return directoryActions.rename(parent, item, name)
+})
+ipcMain.handle('directory:trash', async (event, parent: string, items: string[]) => {
+  assertDirectorySender(event)
+  return directoryActions.trash(parent, items)
+})
+ipcMain.handle('directory:copy', async (event, parent: string, items: string[]) => {
+  assertDirectorySender(event)
+  clipboard.writeText((await directoryActions.targets(parent, items)).join('\n'))
+})
+ipcMain.handle('directory:reveal', async (event, parent: string, item: string) => {
+  assertDirectorySender(event)
+  const [file] = await directoryActions.targets(parent, [item])
+  shell.showItemInFolder(file)
+})
+ipcMain.handle('directory:open', async (event, parent: string, item: string) => {
+  assertDirectorySender(event)
+  const [file] = await directoryActions.targets(parent, [item])
+  if (/\.(exe|com|msi|bat|cmd|ps1|vbs|js|lnk|url|app|sh|command)$/i.test(file)) {
+    const result = await dialog.showMessageBox(mainWindow!, { type: 'warning', title: '打开文件', message: '此文件可能执行程序或打开外部链接，确认打开？', detail: file, buttons: ['取消', '打开'], defaultId: 0, cancelId: 0, noLink: true })
+    if (result.response !== 1) return
+  }
+  const error = await shell.openPath(file)
+  if (error) throw new Error(`无法打开文件：${error}`)
+})
+ipcMain.handle('directory:menu', async (event, parent: string, items: string[]) => {
+  assertDirectorySender(event)
+  await directoryActions.targets(parent, items)
+  let idle = false
+  try { await assertFilesystemIdle(); idle = true } catch { /* Read-only menu items remain available. */ }
+  return new Promise<DirectoryAction | null>(resolve => {
+    let action: DirectoryAction | null = null
+    const choose = (value: DirectoryAction) => { action = value }
+    const menu = Menu.buildFromTemplate([
+      { label: '打开', enabled: items.length === 1, click: () => choose('open') },
+      { label: '在系统文件管理器中显示', enabled: items.length === 1, click: () => choose('reveal') },
+      { label: '复制完整路径', click: () => choose('copy') },
+      { type: 'separator' },
+      { label: '重命名', accelerator: 'F2', enabled: idle && items.length === 1, click: () => choose('rename') },
+      { label: `移入回收站（${items.length} 项）`, enabled: idle, click: () => choose('trash') },
+      ...(!idle ? [{ label: '任务运行中或状态不可用：暂禁删除、改名', enabled: false }] : []),
+    ])
+    menu.popup({ window: mainWindow!, callback: () => resolve(action) })
+  })
+})
+const readNativeThumbnail = createThumbnailReader(async file => {
+  const thumbnail = await nativeImage.createThumbnailFromPath(file, { width: 192, height: 128 })
+  return thumbnail.isEmpty() ? null : thumbnail.resize({ width: 192 }).toDataURL()
+})
+ipcMain.handle('directory:thumbnail', (event, file: string) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return null
+  return readNativeThumbnail(file)
+})
+ipcMain.handle('directory:list', async (event, directory?: string) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('无法访问目录浏览器。')
+  try {
+    if (directory !== undefined && typeof directory !== 'string') throw new Error('目录路径无效。')
+    return await listDirectory(directory)
+  } catch (error: any) {
+    const messages: Record<string, string> = {
+      ENOENT: '文件夹不存在，请检查路径。', ENOTDIR: '请选择文件夹路径。',
+      EACCES: '没有权限读取该文件夹。', EPERM: '没有权限读取该文件夹。',
+    }
+    throw new Error(messages[error.code] || '无法读取文件夹，请检查路径或权限。')
+  }
+})
+ipcMain.handle('directory:create', async (event, parent: string, name: string) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('无法访问目录浏览器。')
+  try { return await createDirectory(parent, name) }
+  catch (error: any) {
+    const messages: Record<string, string> = {
+      EEXIST: '同名文件或文件夹已存在，请换个名称。',
+      EACCES: '没有权限在当前目录创建文件夹，请选择其他目录。',
+      EPERM: '没有权限在当前目录创建文件夹，请选择其他目录。',
+      ENOENT: '当前目录已不存在，请刷新或选择其他目录。',
+      ENOTDIR: '当前路径不是文件夹，请选择其他目录。',
+      ENOSPC: '磁盘空间不足，无法创建文件夹。',
+      ENAMETOOLONG: '名称或路径太长，请缩短名称。',
+      EROFS: '当前目录位于只读磁盘，无法创建文件夹。',
+    }
+    throw new Error(messages[error.code] || (error.code ? '创建失败，请检查名称和目录权限。' : error.message))
+  }
+})
 ipcMain.handle('dialog:openDirectory', async (_, defaultPath?: string, multi = false) => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {

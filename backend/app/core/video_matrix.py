@@ -17,6 +17,7 @@ from .ffmpeg import (
     render_video
 )
 from .timeline import apply_timeline_totals, body_segment_specs
+from .bgm_tracks import configured_tracks, prepare_track, track_filter, TRACK_LABELS
 
 MEDIA_CACHE_VERSION = 2
 DURATION_EPSILON = 0.001
@@ -141,6 +142,7 @@ class VideoMatrixCore:
         self.body_pool: List[dict] = []
         self.body_group_pools: List[List[dict]] = []
         self.bgm_pool: List[dict] = []
+        self.bgm_track_pools: Dict[str, List[dict]] = {}
         self.voice_pool: List[dict] = []
         self.n_total = 0
         self.last_output_path: Optional[str] = None
@@ -251,13 +253,24 @@ class VideoMatrixCore:
         self.body_pool.clear()
         self.body_group_pools.clear()
         self.bgm_pool.clear()
+        self.bgm_track_pools.clear()
         self.voice_pool.clear()
 
         cfg = self.config
+        tracks = configured_tracks(cfg)
+        if tracks:
+            full = tracks.get('full', {})
+            cfg['bgm_dir'] = str(full.get('path') or '').strip() if full.get('enabled', True) else ''
+            cfg['apply_bgm_to_hook'] = True
+            cfg['vol_bgm'] = full.get('volume', 30)
         cfg['bgm_dir'] = str(cfg.get('bgm_dir') or '').strip()
         audio_mode = cfg.get('duration_mode') == 'bgm'
         if audio_mode and not cfg['bgm_dir']:
-            return False, '按 BGM 时长生成需要选择 BGM，请选择音频或切回按片段数量。'
+            return False, '按全片 BGM 时长生成需要选择 BGM 并启用全片轨道，请选择音频或切回按片段数量。' if tracks else '按 BGM 时长生成需要选择 BGM，请选择音频或切回按片段数量。'
+        if tracks:
+            for scope, track in tracks.items():
+                if track.get('enabled', True) and str(track.get('path') or '').strip() and not os.path.exists(track['path'].strip()):
+                    return False, f'{TRACK_LABELS[scope]} 路径不存在，请重新选择或清空。'
         if cfg['bgm_dir'] and not os.path.exists(cfg['bgm_dir']):
             return False, 'BGM 路径不存在，请重新选择；不需要配乐时请清空路径。'
         t_hook = cfg['t_hook']
@@ -291,11 +304,16 @@ class VideoMatrixCore:
             cfg['bgm_dir'],
             ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm')
         )
+        track_files = {
+            scope: self._scan_files(str(track.get('path') or '').strip(),
+                ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.mp4', '.mov', '.mkv', '.avi', '.webm'))
+            for scope, track in tracks.items() if track.get('enabled', True) and str(track.get('path') or '').strip()
+        }
         voice_files = self._scan_files(cfg.get('voice_dir', ''), ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'))
 
         probe_results = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-            all_media = list(set(hook_files + body_files + bgm_files + voice_files))
+            all_media = list(set(hook_files + body_files + bgm_files + voice_files + [f for files in track_files.values() for f in files]))
             futures = {executor.submit(self.probe_media_cached, f): f for f in all_media}
             for future in concurrent.futures.as_completed(futures):
                 if not self.is_running:
@@ -400,7 +418,20 @@ class VideoMatrixCore:
             pools = self.body_group_pools if grouped_body else [self.body_pool]
             body_duration = sum(sum(sorted((c['duration'] for c in pool), reverse=True)[:spec['clip_count']]) for spec, pool in zip(body_specs, pools))
             bgm_duration = body_duration + (max(clip['duration'] for clip in self.hook_pool) if cfg.get('apply_bgm_to_hook', True) else 0)
-        for f in bgm_files:
+        for scope, files in track_files.items():
+            pool = []
+            for f in files:
+                _, has_audio, audio_dur = probe_results[f]
+                if has_audio:
+                    duration = audio_dur + MEDIA_END_SAFETY_MARGIN if audio_dur > 0 else extract_audio_duration(probe_media(f) or {}, safety_margin=0)
+                    if duration > 0:
+                        pool.append(dict(file=f, start=0.0, duration=duration))
+            if not pool:
+                return False, f'{TRACK_LABELS[scope]} 没有可用音频，视频文件必须包含音轨。'
+            self.bgm_track_pools[scope] = pool
+        if tracks:
+            self.bgm_pool = self.bgm_track_pools.get('full', [])
+        for f in ([] if tracks else bgm_files):
             _, has_audio, audio_dur = probe_results[f]
             if has_audio:
                 if audio_mode:
@@ -433,9 +464,10 @@ class VideoMatrixCore:
             if has_audio and audio_dur > 0:
                 self.voice_pool.append({'file': f, 'duration': audio_dur})
 
-        if not self.bgm_pool:
+        if not self.bgm_pool and not self.bgm_track_pools:
             self.log(f'[{self.task_name}] 未选择 BGM：不添加背景音乐。')
-        if not (self.bgm_pool and cfg.get('vol_bgm', 0) > 0) and not (self.voice_pool and cfg.get('vol_voice', 0) > 0) and not (cfg.get('vol_orig', 0) > 0 or (cfg.get('vol_hook_orig') or 0) > 0):
+        music_audible = any(float(tracks[scope].get('volume', 0)) > 0 for scope in self.bgm_track_pools) if tracks else bool(self.bgm_pool and cfg.get('vol_bgm', 0) > 0)
+        if not music_audible and not (self.voice_pool and cfg.get('vol_voice', 0) > 0) and not (cfg.get('vol_orig', 0) > 0 or (cfg.get('vol_hook_orig') or 0) > 0):
             self.log(f'[{self.task_name}] 提示：当前声音均关闭，将生成无声视频。')
 
         protected = [
@@ -518,6 +550,23 @@ class VideoMatrixCore:
         body_duration = cfg['body_duration']
         t_total = cfg['total_duration']
 
+        music_tracks = []
+        if configured_tracks(cfg):
+            with self.core_lock:
+                for scope, pool in self.bgm_track_pools.items():
+                    settings = cfg['bgm_tracks'][scope]
+                    if scope == 'body' and body_duration <= 1e-8:
+                        self.log(f'[{self.task_name}] 无 Body：跳过 Body BGM。')
+                        continue
+                    selected = bgm_clip if scope == 'full' else self.rng.choice(pool)
+                    track = prepare_track(scope, settings, selected, t_hook, t_total, cfg.get('duration_mode') == 'bgm', self.rng)
+                    if not track:
+                        self.log(f"[{self.task_name}] {TRACK_LABELS[scope]} {os.path.basename(selected['file'])}：静音。")
+                        continue
+                    music_tracks.append(track)
+                    action = '循环补齐' if track['loop'] else '裁尾' if track['source_duration'] - track['start'] > track['interval'] + .001 else '播完停止' if track['duration'] < track['interval'] - .001 else '完整播放'
+                    self.log(f"[{self.task_name}] {TRACK_LABELS[scope]} {os.path.basename(track['file'])}：素材 {track['start']:.3f}s 起，视频 {track['offset']:.3f}–{track['offset'] + track['duration']:.3f}s，{action}" + ('；淡化时长已按比例缩短' if track['fade_adjusted'] else '') + '。')
+
         temp_srt_path_safe = None
         with self.core_lock:
             self.output_configs[task_idx] = cfg
@@ -535,7 +584,7 @@ class VideoMatrixCore:
         vol_orig = cfg['vol_orig'] / 100.0
         hook_volume_value = cfg.get('vol_hook_orig')
         vol_hook_orig = (cfg['vol_orig'] if hook_volume_value is None else hook_volume_value) / 100.0
-        vol_bgm = cfg['vol_bgm'] / 100.0 if bgm_clip else 0.0
+        vol_bgm = cfg['vol_bgm'] / 100.0 if bgm_clip and not configured_tracks(cfg) else 0.0
         vol_voice = cfg['vol_voice'] / 100.0
         fps_val = str(cfg['fps'])
 
@@ -544,7 +593,11 @@ class VideoMatrixCore:
         has_original_audio = vol_hook_orig > 0 or vol_orig > 0
 
         clips = [hook_clip] + list(body_clips)
-        inputs = [c['file'] for c in clips] + ([bgm_clip['file']] if bgm_clip else [])
+        inputs = [c['file'] for c in clips] + ([bgm_clip['file']] if bgm_clip and not configured_tracks(cfg) else [])
+        music_inputs = {}
+        for track in music_tracks:
+            music_inputs[len(inputs)] = track
+            inputs.append(track['file'])
 
         voice_idx = -1
         if has_voice:
@@ -572,6 +625,8 @@ class VideoMatrixCore:
                     cmd.extend(['-i', inp])
             else:
                 offset = seek_offsets[idx] if idx < len(clips) else bgm_seek if idx == len(clips) else 0.0
+                if idx in music_inputs:
+                    offset = music_inputs[idx]['seek']
                 if offset > 0:
                     cmd.extend(['-ss', f'{offset:.9f}'])
                 cmd.extend(['-threads', '2', '-i', inp])
@@ -636,6 +691,8 @@ class VideoMatrixCore:
             current_v = "[v_wm]"
 
         bgm_idx = n_clips
+        for input_index, track in music_inputs.items():
+            filter_complex += track_filter(track, input_index)
         if vol_bgm > 0:
             bgm_offset = 0.0 if cfg.get('apply_bgm_to_hook', True) else t_hook
             bgm_delay = f",adelay={int(round(bgm_offset * 1000))}|{int(round(bgm_offset * 1000))}" if bgm_offset > 0 else ""
@@ -659,6 +716,7 @@ class VideoMatrixCore:
             )
 
         mix_tracks = []
+        mix_tracks.extend(f"[bgm_{track['scope']}]" for track in music_tracks)
         if has_original_audio:
             mix_tracks.append("[aout_orig]")
         if vol_bgm > 0:
@@ -667,7 +725,18 @@ class VideoMatrixCore:
             mix_tracks.append("[aout_voice_v]")
 
         audio_map = None
-        if len(mix_tracks) > 1:
+        if configured_tracks(cfg) and mix_tracks:
+            # Preserve requested gains rather than averaging by the number of
+            # configured tracks. Only peaks exceeding full scale are limited.
+            inputs_str = ''.join(mix_tracks)
+            if len(mix_tracks) > 1:
+                filter_complex += f'{inputs_str}amix=inputs={len(mix_tracks)}:duration=longest:dropout_transition=0:normalize=0[aout_sum]; '
+                audio_source = '[aout_sum]'
+            else:
+                audio_source = mix_tracks[0]
+            filter_complex += f'{audio_source}alimiter=limit=1:level=false:latency=true[aout_limited]; '
+            audio_source = '[aout_limited]'
+        elif len(mix_tracks) > 1:
             inputs_str = "".join(mix_tracks)
             bgm_on_hook = cfg.get('apply_bgm_to_hook', True)
             voice_on_hook = cfg.get('apply_voice_to_hook', True)

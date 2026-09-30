@@ -60,6 +60,7 @@ import { FeatureHelp } from './FeatureHelp'
 interface AssetCardProps {
   kind: keyof typeof AssetIcons
   label: string
+  inputLabel?: string
   value: string
   count?: number
   required?: boolean
@@ -76,7 +77,7 @@ interface AssetCardProps {
   onBodyOnlyChange?: (enabled: boolean) => void
 }
 
-export function AssetCard({ kind, label, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, enabled, onEnabledChange, bodyOnly, onBodyOnlyChange }: AssetCardProps) {
+export function AssetCard({ kind, label, inputLabel, value, count, required, onBrowse, onChange, onOpen, onClear, pickAction = '浏览', secondaryAction, onSecondaryAction, enabled, onEnabledChange, bodyOnly, onBodyOnlyChange }: AssetCardProps) {
   const filled = !!value
 
   return (
@@ -108,11 +109,11 @@ export function AssetCard({ kind, label, value, count, required, onBrowse, onCha
         <span className="w-[104px] shrink-0 inline-flex items-center whitespace-nowrap text-[11px] text-foreground/85">
           {label}
           {['bgm', 'voice', 'srt', 'watermark'].includes(kind) && <span className="ml-1 text-[9px] text-accent">可选</span>}
-          <FeatureHelp topic={kind} title={kind === 'bgm' ? 'BGM 配乐' : label} />
+          <FeatureHelp topic={kind} title={kind === 'bgm' && label === 'BGM' ? 'BGM 配乐' : label} />
           {required && !filled && <span className="ml-1 text-hot/85">必填</span>}
         </span>
         <input
-          aria-label={kind === 'bgm' ? 'BGM 路径' : label}
+          aria-label={inputLabel || (kind === 'bgm' ? 'BGM 路径' : label)}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           title={value}
