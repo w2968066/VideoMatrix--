@@ -20,10 +20,40 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } })
     const errors = []
     const taskLogs = []
+    let taskFixtures = null
+    const taskStopCalls = []
+    const taskGetCalls = []
+    let pendingStopRoute = null
+    let failNextStop = false
+    const benchmarkCalls = []
+    let pendingBenchmarkRoute = null
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/api/**', route => {
       const url = route.request().url()
-      const body = url.includes('/health') ? { status: 'ok' } : url.includes('/tasks') ? (taskLogs.length ? [{ task_id: 'scroll-test', task_name: 'Scroll', status: 'running', log_lines: taskLogs, output_files: [], progress: 0, current: 0, total: 1 }] : [])
+      if (new URL(url).pathname === '/api/benchmark' && route.request().method() === 'POST') {
+        benchmarkCalls.push(route.request().postDataJSON())
+        taskFixtures = [{ task_id: `benchmark-ui-${benchmarkCalls.length}`, task_name: `智能压测回归 ${benchmarkCalls.length}`,
+          status: 'running', log_lines: [], output_files: [], progress: 17, current: 1, total: 6,
+          message: '测试服务端真实进度 17%' }]
+        pendingBenchmarkRoute = route
+        return
+      }
+      const taskStopMatch = new URL(url).pathname.match(/^\/api\/tasks\/([^/]+)\/stop$/)
+      if (taskStopMatch && route.request().method() === 'POST') {
+        taskStopCalls.push(taskStopMatch[1])
+        if (failNextStop) {
+          failNextStop = false
+          return route.fulfill({ status: 500, json: { detail: '测试停止失败' } })
+        }
+        pendingStopRoute = route
+        return
+      }
+      const taskGetMatch = new URL(url).pathname.match(/^\/api\/tasks\/([^/]+)$/)
+      if (taskGetMatch && route.request().method() === 'GET' && taskFixtures) {
+        taskGetCalls.push(taskGetMatch[1])
+        return route.fulfill({ json: taskFixtures.find(task => task.task_id === taskGetMatch[1]) })
+      }
+      const body = url.includes('/health') ? { status: 'ok' } : url.includes('/tasks') ? (taskFixtures ?? (taskLogs.length ? [{ task_id: 'scroll-test', task_name: 'Scroll', status: 'running', log_lines: taskLogs, output_files: [], progress: 0, current: 0, total: 1 }] : []))
         : url.includes('/scan') ? { files: ['music.wav'], count: 1 }
         : url.includes('/probe') ? { audio_duration: 25, source_duration: 3 } : {}
       return route.fulfill({ json: body })
@@ -137,8 +167,10 @@ async function main() {
     await picker.getByRole('button', { name: 'Group A', exact: true }).waitFor()
     await picker.getByRole('button', { name: '前进', exact: true }).click()
     await picker.getByRole('button', { name: 'inside-folder.mp4', exact: true }).waitFor()
+    await picker.focus()
     await page.keyboard.press('Alt+ArrowLeft')
     await picker.getByRole('button', { name: 'Group A', exact: true }).waitFor()
+    await picker.focus()
     await page.keyboard.press('Alt+ArrowRight')
     await picker.getByRole('button', { name: 'inside-folder.mp4', exact: true }).waitFor()
     await picker.getByRole('button', { name: '打开收藏 C:\\assets', exact: true }).click()
@@ -370,6 +402,142 @@ async function main() {
     assert.equal(await picker.getByRole('button', { name: '打开收藏 C:\\assets\\Renamed Hook', exact: true }).count(), 0)
     assert.equal(await page.getByRole('textbox', { name: '文件夹', exact: true }).inputValue(), 'C:\\assets\\Group B')
     await picker.getByRole('button', { name: '取消', exact: true }).click()
+    // Post-processing is still running: no premature final output or celebration.
+    taskFixtures = [{ task_id: 'output-status-test', task_name: '封面状态回归', status: 'running',
+      log_lines: [], output_files: [], progress: 50, current: 0, total: 2,
+      message: '基础混剪完成，随机封面处理中' }]
+    await page.getByRole('button', { name: /^任务/ }).click()
+    await page.getByText('基础混剪完成，随机封面处理中', { exact: true }).waitFor()
+    await page.getByRole('button', { name: /^产出/ }).click()
+    await page.getByText('暂无产出', { exact: true }).waitFor()
+    assert.equal(await page.getByText('任务完成', { exact: true }).count(), 0)
+    const warningFile = 'C:\\output\\保留基础视频.mp4'
+    const finalFile = '/output/正常成品.mp4'
+    const outputWarning = '随机封面未完成：用户已停止，保留基础视频。'
+    taskFixtures = [{ ...taskFixtures[0], status: 'partial', progress: 100, current: 2,
+      message: '已保留 2 条视频，其中 1 条后处理未完成', output_files: [warningFile, finalFile],
+      output_warnings: { [warningFile]: outputWarning }, output_elapsed: { [warningFile]: 12.5, [finalFile]: 13 } }]
+    await page.getByRole('status').filter({ hasText: '部分完成：封面状态回归' }).waitFor()
+    await page.getByText('保留基础视频.mp4', { exact: true }).waitFor()
+    await page.getByText('正常成品.mp4', { exact: true }).waitFor()
+    assert.equal(await page.getByText('任务完成', { exact: true }).count(), 0)
+    assert.equal(await page.getByText('有警告 · 后处理未完成', { exact: true }).count(), 1)
+    await page.getByText('有警告 · 后处理未完成', { exact: true }).click()
+    await page.getByText(outputWarning, { exact: true }).waitFor()
+    await page.screenshot({ path: path.resolve(__dirname, '../dist/ui-output-warning-dark.png') })
+    await page.getByRole('button', { name: /^任务/ }).click()
+    await page.getByText('部分完成', { exact: true }).waitFor()
+    await page.getByText(taskFixtures[0].message, { exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Light', exact: true }).click()
+    await page.getByRole('button', { name: /^产出/ }).click()
+    await page.getByText('有警告 · 后处理未完成', { exact: true }).click()
+    await page.screenshot({ path: path.resolve(__dirname, '../dist/ui-output-warning-light.png') })
+    // A row stop request must affect just that task, never the other active rows.
+    const taskDefaults = { log_lines: [], output_files: [], progress: 0, current: 0, total: 2, message: '' }
+    taskFixtures = [
+      { ...taskDefaults, task_id: 'stop-a', task_name: '任务甲', status: 'running' },
+      { ...taskDefaults, task_id: 'stop-b', task_name: '任务乙', status: 'pending' },
+      { ...taskDefaults, task_id: 'already-done', task_name: '已完成任务', status: 'completed', progress: 100 },
+    ]
+    await page.getByRole('button', { name: /^任务/ }).click()
+    const stopA = page.getByRole('button', { name: '停止任务 任务甲', exact: true })
+    const stopB = page.getByRole('button', { name: '停止任务 任务乙', exact: true })
+    await stopA.waitFor()
+    assert.equal(await stopB.isEnabled(), true)
+    assert.equal(await page.getByRole('button', { name: '停止任务 已完成任务', exact: true }).count(), 0)
+    await stopA.click()
+    await page.getByText('停止中…', { exact: true }).waitFor()
+    assert.equal(await stopA.isDisabled(), true)
+    // Force a duplicate DOM click: disabled state and the request guard reject it.
+    await stopA.evaluate(button => button.click())
+    assert.equal(await stopB.isEnabled(), true)
+    assert.deepEqual(taskStopCalls, ['stop-a'])
+    assert(pendingStopRoute)
+    taskFixtures[0] = { ...taskFixtures[0], status: 'stopped', message: '任务甲已停止' }
+    await pendingStopRoute.fulfill({ json: { message: '停止指令已发送' } })
+    pendingStopRoute = null
+    await page.getByText('任务甲已停止', { exact: true }).waitFor()
+    assert.equal(await stopA.count(), 0)
+    assert.deepEqual(taskGetCalls, ['stop-a'])
+    assert.deepEqual(taskStopCalls, ['stop-a'])
+    assert.equal(await stopB.isEnabled(), true)
+    failNextStop = true
+    await stopB.click()
+    await page.getByRole('status').filter({ hasText: '停止失败：任务乙。测试停止失败' }).waitFor()
+    assert.equal(await stopB.isEnabled(), true)
+    assert.deepEqual(taskStopCalls, ['stop-a', 'stop-b'])
+    assert.equal(taskFixtures[1].status, 'pending')
+    await page.screenshot({ path: path.resolve(__dirname, '../dist/ui-task-stop-light.png') })
+    // Production and benchmarking must not compete; preserve the existing stop isolation assertions above.
+    const benchmarkButton = page.getByRole('button', { name: '智能压测', exact: true })
+    const concurrencyInput = page.getByRole('textbox', { name: '并发', exact: true })
+    await page.getByRole('textbox', { name: 'Hook 首段', exact: true }).fill('C:\\assets\\benchmark-hook')
+    await concurrencyInput.fill('4')
+    assert.equal(await benchmarkButton.isDisabled(), true)
+    assert.equal(benchmarkCalls.length, 0)
+    taskFixtures[1] = { ...taskFixtures[1], status: 'running', message: '生产任务仍在运行' }
+    await page.getByText('生产任务仍在运行', { exact: true }).waitFor()
+    assert.equal(await benchmarkButton.isDisabled(), true)
+    assert.equal(benchmarkCalls.length, 0)
+    taskFixtures = []
+    await page.getByText('暂无任务', { exact: true }).waitFor()
+    await benchmarkButton.click()
+    const realProgress = page.getByRole('button', { name: '压测中 17%', exact: true })
+    await realProgress.waitFor()
+    assert.equal(await page.getByRole('button', { name: '启动渲染', exact: true }).isDisabled(), true)
+    // Keep backend progress unchanged beyond several old fake-progress timer ticks.
+    await page.waitForTimeout(2600)
+    assert.equal(await realProgress.count(), 1)
+    taskFixtures[0] = { ...taskFixtures[0], progress: 43, current: 3, message: '测试服务端真实进度 43%' }
+    await page.getByRole('button', { name: '压测中 43%', exact: true }).waitFor()
+    await page.screenshot({ path: path.resolve(__dirname, '../dist/ui-benchmark-progress.png') })
+    // Cancel a registered benchmark through its individual task button.
+    await page.getByRole('button', { name: '停止任务 智能压测回归 1', exact: true }).click()
+    await page.getByText('停止中…', { exact: true }).waitFor()
+    assert.equal(taskStopCalls.at(-1), 'benchmark-ui-1')
+    taskFixtures[0] = { ...taskFixtures[0], status: 'stopped', message: '测试压测已停止' }
+    await pendingStopRoute.fulfill({ json: { message: '停止指令已发送' } })
+    pendingStopRoute = null
+    await page.getByText('测试压测已停止', { exact: true }).waitFor()
+    await pendingBenchmarkRoute.fulfill({ json: { error: '用户已停止压测', cancelled: true, best_concurrent: null, results: {} } })
+    pendingBenchmarkRoute = null
+    await benchmarkButton.waitFor()
+    assert.equal(await concurrencyInput.inputValue(), '4')
+    assert.equal(await page.getByText('任务完成', { exact: true }).count(), 0)
+    assert.equal(await page.getByRole('status').filter({ hasText: '任务完成：智能压测' }).count(), 0)
+    // Unstable/no-recommendation results keep the user's configured concurrency.
+    await benchmarkButton.click()
+    await realProgress.waitFor()
+    taskFixtures[0] = { ...taskFixtures[0], status: 'completed', progress: 100, message: '测试无推荐已结束' }
+    await pendingBenchmarkRoute.fulfill({ json: { best_concurrent: null, note: '不稳定样本不推荐', sample_count: 4,
+      results: { 4: { concurrent: 4, total_time: 35, avg_video_elapsed: 28, stable: false, reason: '测试 GPU 重试' } },
+      verification_results: {} } })
+    pendingBenchmarkRoute = null
+    await page.getByRole('status').filter({ hasText: '压测未得到可靠推荐，当前并发设置未改变' }).waitFor()
+    await benchmarkButton.waitFor()
+    await page.getByText('测试无推荐已结束', { exact: true }).waitFor()
+    assert.equal(await concurrencyInput.inputValue(), '4')
+    assert.equal(await page.getByText('任务完成', { exact: true }).count(), 0)
+    assert.equal(await page.getByRole('status').filter({ hasText: '任务完成：智能压测' }).count(), 0)
+    // A reliable recommendation applies once; report throughput and actual latency separately.
+    await benchmarkButton.click()
+    await realProgress.waitFor()
+    taskFixtures[0] = { ...taskFixtures[0], status: 'completed', progress: 100, message: '测试可靠推荐已结束' }
+    await pendingBenchmarkRoute.fulfill({ json: { best_concurrent: 2, sample_count: 4,
+      results: { 2: { concurrent: 2, total_time: 26, videos_per_minute: 9.23, avg_video_elapsed: 11, stable: true } },
+      verification_results: { 2: { concurrent: 2, total_time: 27, videos_per_minute: 8.89, avg_video_elapsed: 12, stable: true } } } })
+    pendingBenchmarkRoute = null
+    await page.getByRole('status').filter({ hasText: '压测建议 2 路并发' }).waitFor()
+    await benchmarkButton.waitFor()
+    await page.getByText('测试可靠推荐已结束', { exact: true }).waitFor()
+    assert.equal(await concurrencyInput.inputValue(), '2')
+    assert.equal(benchmarkCalls.length, 3)
+    assert.equal(await page.getByText('任务完成', { exact: true }).count(), 0)
+    await page.getByRole('button', { name: /^日志/ }).click()
+    await page.getByText(/\[初测\] 2 路，同批 4 条总耗时 26 秒，9\.23 条\/分，单条实际平均 11 秒/).waitFor()
+    await page.getByText(/\[复测\] 2 路，同批 4 条总耗时 27 秒，8\.89 条\/分，单条实际平均 12 秒/).waitFor()
+    await page.getByText(/不稳定：测试 GPU 重试/).waitFor()
+    taskFixtures = null
     // Migrating legacy Body-duration settings must notify once and preserve music.
     await page.evaluate(() => localStorage.setItem('vm-config', JSON.stringify({ bgm_dir: 'legacy.wav',
       vol_bgm: 45, apply_bgm_to_hook: false, duration_mode: 'bgm' })))
@@ -382,7 +550,7 @@ async function main() {
     await page.reload()
     assert.equal(await page.getByText(/^旧版 Body 音乐与音量已保留/).count(), 0)
     assert.deepEqual(errors, [])
-    console.log('UI smoke passed: directory views/sorting/favorites, navigation, management vs material selection, shortcuts, rename/trash failures, task guard, BGM and existing controls.')
+    console.log('UI smoke passed: directory/BGM controls, final-only outputs, partial warnings, isolated stopping, production/benchmark exclusion, real benchmark progress, cancellation, stable recommendations and throughput/latency reporting.')
   } finally {
     await browser?.close()
     await new Promise(resolve => server.close(resolve))

@@ -241,36 +241,55 @@ function parseFps(value: string | number) {
 }
 
 // ─── Task row ─────────────────────────────────────────────────────────────────
-function TaskRow({ task }: { task: TaskStatus }) {
+function TaskRow({ task, stopping, onStop }: { task: TaskStatus; stopping: boolean; onStop: (task: TaskStatus) => void }) {
   const tone: Record<string, { bar: string; text: string; label: string }> = {
     pending:   { bar: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: '等待' },
     running:   { bar: 'bg-accent',              text: 'text-accent',           label: '运行' },
     completed: { bar: 'bg-ok',                  text: 'text-ok',               label: '完成' },
+    partial:   { bar: 'bg-accent',              text: 'text-accent',           label: '部分完成' },
     failed:    { bar: 'bg-hot',                 text: 'text-hot',              label: '失败' },
     stopped:   { bar: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: '停止' },
   }
   const t = tone[task.status] || tone.pending
   return (
-    <div className="flex items-center gap-2 py-1.5 border-b border-border/[0.04] last:border-0">
-      <span className={`w-8 shrink-0 text-[10px] font-mono ${t.text}`}>{t.label}</span>
-      <span className="flex-1 text-[11px] text-foreground/85 truncate">{task.task_name}</span>
-      {task.acceleration && task.status === 'running' && (
-        <span
-          className={`max-w-44 truncate text-[10px] ${task.acceleration_warning ? 'text-amber-400' : 'text-muted-foreground'}`}
-          title={task.acceleration_warning || task.acceleration}
-        >
-          {task.acceleration_warning || task.acceleration}
-        </span>
-      )}
-      {task.total > 0 && (
-        <>
-          <div className="w-20 h-px bg-foreground/[0.08] overflow-hidden relative">
-            <div className={`absolute inset-y-0 left-0 ${t.bar} transition-all duration-500`} style={{ width: `${task.progress}%` }} />
-          </div>
-          <span className="text-[10px] font-mono text-muted-foreground tabular-nums w-14 text-right">
-            {task.current}/{task.total} · {task.progress}%
+    <div data-task-id={task.task_id} className="py-1.5 border-b border-border/[0.04] last:border-0">
+      <div className="flex items-center gap-2">
+        <span className={`min-w-8 shrink-0 text-[10px] font-mono ${t.text}`}>{t.label}</span>
+        <span className="flex-1 text-[11px] text-foreground/85 truncate">{task.task_name}</span>
+        {task.acceleration && task.status === 'running' && (
+          <span
+            className={`max-w-44 truncate text-[10px] ${task.acceleration_warning ? 'text-amber-400' : 'text-muted-foreground'}`}
+            title={task.acceleration_warning || task.acceleration}
+          >
+            {task.acceleration_warning || task.acceleration}
           </span>
-        </>
+        )}
+        {task.total > 0 && (
+          <>
+            <div className="w-12 shrink-0 h-px bg-foreground/[0.08] overflow-hidden relative">
+              <div className={`absolute inset-y-0 left-0 ${t.bar} transition-all duration-500`} style={{ width: `${task.progress}%` }} />
+            </div>
+            <span className="shrink-0 whitespace-nowrap text-[10px] font-mono text-muted-foreground tabular-nums text-right">
+              {task.current}/{task.total} · {task.progress}%
+            </span>
+          </>
+        )}
+        {(task.status === 'pending' || task.status === 'running') && (
+          <button
+            type="button"
+            onClick={() => onStop(task)}
+            disabled={stopping}
+            aria-label={`停止任务 ${task.task_name}`}
+            className="shrink-0 rounded-[3px] border border-hot/30 px-1.5 py-1 text-[10px] leading-none text-hot hover:bg-hot/10 transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {stopping ? '停止中…' : '停止'}
+          </button>
+        )}
+      </div>
+      {task.message && (
+        <div className={`mt-1 text-[10px] leading-4 break-words ${task.status === 'partial' ? 'text-accent' : 'text-muted-foreground'}`}>
+          {task.message}
+        </div>
       )}
     </div>
   )
@@ -281,10 +300,14 @@ export default function SinglePage() {
   const { openDirectory, directoryPicker } = useDirectoryPicker()
   const { config, setConfig, tasks, logs, appendLog, clearLogs, addToast, scannedFiles } = useStore()
   const [isRunning, setIsRunning] = useState(false)
+  const [stoppingTaskIds, setStoppingTaskIds] = useState<string[]>([])
+  const stopRequestsRef = useRef(new Set<string>())
   const [rightTab, setRightTab] = useState<'log' | 'tasks' | 'output' | 'variant'>('log')
   const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('vm-theme') as 'dark' | 'light') || 'dark')
   const [benchmarkRunning, setBenchmarkRunning] = useState(false)
   const [benchmarkProgress, setBenchmarkProgress] = useState(0)
+  const benchmarkTaskRef = useRef<string | null>(null)
+  const activeBenchmark = benchmarkRunning || tasks.some(task => task.task_id.startsWith('benchmark-') && ['pending', 'running'].includes(task.status))
   const [preflightRunning, setPreflightRunning] = useState(false)
   const [completionNotice, setCompletionNotice] = useState<string | null>(null)
   const [contactVisible, setContactVisible] = useState(false)
@@ -390,6 +413,16 @@ export default function SinglePage() {
   const logScrollTopRef = useRef(0)
   const taskStatusRef = useRef<Record<string, string>>({})
 
+  useEffect(() => {
+    if (!benchmarkRunning) return
+    const task = tasks.find(item => item.task_id === benchmarkTaskRef.current)
+      || tasks.slice().reverse().find(item => item.task_id.startsWith('benchmark-') && ['pending', 'running'].includes(item.status))
+    if (task) {
+      benchmarkTaskRef.current = task.task_id
+      setBenchmarkProgress(task.progress)
+    }
+  }, [tasks, benchmarkRunning])
+
   useLayoutEffect(() => {
     if (!logs.length) {
       followLogsRef.current = true
@@ -408,11 +441,20 @@ export default function SinglePage() {
   useEffect(() => {
     tasks.forEach((task) => {
       const previous = taskStatusRef.current[task.task_id]
+      if (task.task_id.startsWith('benchmark-')) {
+        taskStatusRef.current[task.task_id] = task.status
+        return
+      }
       if (previous && previous !== task.status && task.status === 'completed') {
         addToast(`任务完成：${task.task_name}`, 'success')
         appendLog(`✅ ${new Date().toLocaleTimeString()} 任务完成：${task.task_name}`)
         setCompletionNotice(task.task_name)
         window.setTimeout(() => setCompletionNotice(null), 6500)
+        setRightTab('output')
+      }
+      if (previous && previous !== task.status && task.status === 'partial') {
+        addToast(`部分完成：${task.task_name}。${task.message || '请查看产出及日志'}`, 'warning')
+        setCompletionNotice(null)
         setRightTab('output')
       }
       taskStatusRef.current[task.task_id] = task.status
@@ -443,6 +485,7 @@ export default function SinglePage() {
   const allOutputItems = tasks.flatMap(t => t.output_files.map((file) => ({
     file,
     elapsed: t.output_elapsed?.[file],
+    warning: t.output_warnings?.[file],
   })))
   const setParam = (key: string, raw: string) => setConfig({ [key]: raw } as any)
   const toggleFinishedHookMode = () => {
@@ -577,6 +620,7 @@ export default function SinglePage() {
   }
 
   const startRender = async () => {
+    if (activeBenchmark) { addToast('请先结束压测再启动生产', 'warning'); return }
     const runConfig = ensureRunConfig()
     if (!runConfig) return
     setIsRunning(true)
@@ -616,38 +660,53 @@ export default function SinglePage() {
   const benchmark = async () => {
     const runConfig = ensureRunConfig()
     if (!runConfig || benchmarkRunning) return
+    if (tasks.some(task => ['pending', 'running'].includes(task.status))) {
+      addToast('请等待当前任务结束后再压测，避免相互争用资源', 'warning')
+      return
+    }
 
+    benchmarkTaskRef.current = null
     setBenchmarkRunning(true)
-    setBenchmarkProgress(1)
-    appendLog('>>> [压测] 正在测试 1%')
+    setBenchmarkProgress(0)
+    setRightTab('tasks')
+    appendLog('>>> [压测] 准备同批成品测试与复测；可在任务页单独停止')
     addToast('智能压测已开始', 'info')
-
-    const timer = window.setInterval(() => {
-      setBenchmarkProgress((p) => {
-        const next = Math.min(95, p + 7)
-        if (next % 14 === 0 || next === 95) appendLog(`>>> [压测] 正在测试 ${next}%`)
-        return next
-      })
-    }, 900)
 
     try {
       const res = await api.benchmark(runConfig)
-      if (res.error) { addToast(res.error, 'error'); return }
+      if (res.note) appendLog(`>>> [压测说明] ${res.note}`)
+      const showResults = (results: any, prefix: string) => {
+        Object.values(results || {}).forEach((item: any) => {
+          const count = item.sample_count ?? res.sample_count ?? '?'
+          const throughput = item.videos_per_minute == null ? '' : `，${item.videos_per_minute} 条/分`
+          const latency = item.avg_video_elapsed == null ? '' : `，单条实际平均 ${item.avg_video_elapsed} 秒`
+          const reason = item.reason || item.reasons?.join('；') || ''
+          appendLog(`    - [${prefix}] ${item.concurrent} 路，同批 ${count} 条总耗时 ${item.total_time} 秒${throughput}${latency}${item.stable === false ? `；不稳定：${reason || '见压测任务日志'}` : ''}`)
+        })
+      }
+      showResults(res.results, '初测')
+      showResults(res.verification_results, '复测')
+      if (res.error) {
+        appendLog(`>>> [压测${res.cancelled ? '停止' : '未完成'}] ${res.error}`)
+        addToast(res.error, res.cancelled ? 'info' : 'warning')
+        return
+      }
       setBenchmarkProgress(100)
-      appendLog('>>> [压测] 智能压测完成')
-      Object.values(res.results || {}).forEach((item: any) => {
-        appendLog(`    - ${item.concurrent} 路并发总耗时: ${item.total_time} 秒，单视频平均: ${item.avg_per_video} 秒`)
-      })
-      appendLog(`✅ [压测完成] 最优节点为 ${res.best_concurrent} 路并发`)
+      if (!Number.isInteger(res.best_concurrent) || res.best_concurrent < 1 || res.best_concurrent > 4) {
+        appendLog('>>> [压测] 数据不足或不稳定，保留当前并发设置')
+        addToast('压测未得到可靠推荐，当前并发设置未改变', 'warning')
+        return
+      }
+      appendLog(`✅ [压测完成] 复测后建议 ${res.best_concurrent} 路；耗时相近时优先较低并发`)
       setConfig({ concurrent_tasks: res.best_concurrent })
-      addToast(`最优并发 ${res.best_concurrent} 路`, 'success')
+      addToast(`压测建议 ${res.best_concurrent} 路并发`, 'success')
     } catch (e: any) {
       addToast(e.message, 'error')
     } finally {
-      window.clearInterval(timer)
       window.setTimeout(() => {
         setBenchmarkRunning(false)
         setBenchmarkProgress(0)
+        benchmarkTaskRef.current = null
       }, 800)
     }
   }
@@ -660,6 +719,32 @@ export default function SinglePage() {
     } catch (e: any) {
       addToast(e.message, 'error')
       appendLog(`[错误] ${e.message}`)
+    }
+  }
+
+  const stopOneTask = async (task: TaskStatus) => {
+    const active = useStore.getState().tasks.find(item => item.task_id === task.task_id)
+    if (!active || !['pending', 'running'].includes(active.status) || stopRequestsRef.current.has(task.task_id)) return
+    stopRequestsRef.current.add(task.task_id)
+    setStoppingTaskIds(ids => [...ids, task.task_id])
+    try {
+      await api.stopTask(task.task_id)
+      appendLog(`▸ ${new Date().toLocaleTimeString()} 已发送停止指令：${task.task_name}`)
+      addToast(`已请求停止：${task.task_name}`, 'info')
+      try {
+        const updated = await api.getTask(task.task_id)
+        const state = useStore.getState()
+        state.setTasks(state.tasks.map(item => item.task_id === task.task_id ? updated : item))
+      } catch {
+        addToast('停止指令已发送，任务状态将自动刷新', 'warning')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      addToast(`停止失败：${task.task_name}。${message}`, 'error')
+      appendLog(`[错误] 停止 ${task.task_name} 失败：${message}`)
+    } finally {
+      stopRequestsRef.current.delete(task.task_id)
+      setStoppingTaskIds(ids => ids.filter(id => id !== task.task_id))
     }
   }
 
@@ -956,7 +1041,7 @@ export default function SinglePage() {
                 <button type="button" onClick={preFlight} disabled={preflightRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:cursor-wait disabled:opacity-70">
                   {preflightRunning ? '预检中...' : '预检产能'}
                 </button>
-                <button type="button" onClick={startRender} disabled={isRunning} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
+                <button type="button" onClick={startRender} disabled={isRunning || activeBenchmark} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover disabled:opacity-50">
                   {isRunning ? '启动中…' : '启动渲染'}
                 </button>
                 <button type="button" onClick={clearHistory} className="h-8 rounded-[4px] bg-accent px-2 text-[12px] font-semibold text-background hover:bg-accent-hover">
@@ -965,7 +1050,7 @@ export default function SinglePage() {
                 <button type="button" onClick={stopRunning} disabled={running === 0} className="h-8 rounded-[4px] bg-hot px-2 text-[12px] font-semibold text-white hover:bg-hot/90 disabled:bg-hot/70 disabled:text-white/55">
                   停止
                 </button>
-                <button type="button" onClick={benchmark} disabled={benchmarkRunning} className="mt-0.5 h-6 rounded-[4px] border border-border/[0.10] bg-foreground/[0.01] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
+                <button type="button" onClick={benchmark} disabled={benchmarkRunning || tasks.some(task => ['pending', 'running'].includes(task.status))} title="同一批素材完整测试并复测；运行中的任务需先结束" className="mt-0.5 h-6 rounded-[4px] border border-border/[0.10] bg-foreground/[0.01] px-2 text-[10px] text-muted-foreground hover:border-accent/60 hover:text-accent disabled:cursor-wait disabled:border-accent/50 disabled:text-accent">
                   {benchmarkRunning ? `压测中 ${benchmarkProgress}%` : '智能压测'}
                 </button>
               </div>
@@ -1104,7 +1189,7 @@ export default function SinglePage() {
                       暂无任务
                     </div>
                   ) : (
-                    tasks.slice().reverse().map(t => <TaskRow key={t.task_id} task={t} />)
+                    tasks.slice().reverse().map(t => <TaskRow key={t.task_id} task={t} stopping={stoppingTaskIds.includes(t.task_id)} onStop={stopOneTask} />)
                   )}
                 </div>
               )}
@@ -1117,16 +1202,24 @@ export default function SinglePage() {
                       暂无产出
                     </div>
                   ) : (
-                    allOutputItems.map(({ file: f, elapsed }, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1.5 border-b border-border/[0.04] last:border-0">
-                        <span className="text-[10px] text-muted-foreground font-mono tabular-nums w-6">
+                    allOutputItems.map(({ file: f, elapsed, warning }, i) => (
+                      <div key={i} className="flex items-start gap-2 py-1.5 border-b border-border/[0.04] last:border-0">
+                        <span className="text-[10px] text-muted-foreground font-mono tabular-nums w-6 shrink-0">
                           {String(i + 1).padStart(2, '0')}
                         </span>
-                        <span className="flex-1 text-[11px] text-foreground/85 font-mono truncate">
-                          {f.split('/').pop()}
-                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] text-foreground/85 font-mono truncate" title={f}>
+                            {f.split(/[\\/]/).pop()}
+                          </div>
+                          {warning && (
+                            <details className="mt-1 text-[10px] leading-4 text-accent">
+                              <summary className="cursor-pointer" title={warning}>有警告 · 后处理未完成</summary>
+                              <p className="mt-1 whitespace-pre-wrap break-all">{warning}</p>
+                            </details>
+                          )}
+                        </div>
                         {elapsed !== undefined && (
-                          <span className="w-14 text-right text-[10px] font-mono text-accent">
+                          <span className="w-14 shrink-0 text-right text-[10px] font-mono text-accent">
                             {elapsed}s
                           </span>
                         )}

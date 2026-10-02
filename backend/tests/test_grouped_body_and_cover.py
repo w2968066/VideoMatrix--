@@ -1,9 +1,12 @@
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.ffmpeg import FFMPEG, FFPROBE, probe_media
 from app.core.timeline import apply_timeline_totals
@@ -125,6 +128,8 @@ class RandomCoverTests(unittest.TestCase):
                 fps_value = 30000 / 1001 if "/" in fps else float(fps)
                 # Packet PTS are quantized to the source audio timebase; mux offset stays within one AAC frame.
                 self.assertLess(abs(first_audio_pts(path) - before_audio_pts - 1 / fps_value), 1024 / 44100)
+            else:
+                self.assertEqual(first_audio_pts(path), before_audio_pts)
 
     def test_cover_preserves_audio_and_frame_count_at_24fps(self):
         self._exercise_cover("24")
@@ -137,6 +142,74 @@ class RandomCoverTests(unittest.TestCase):
 
     def test_insert_cover_offsets_audio_and_adds_one_frame_at_2997fps(self):
         self._exercise_cover("30000/1001", "insert")
+
+    def test_independent_seek_selects_first_middle_and_last_frames_without_audio(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for fps in ("24", "30000/1001"):
+                source = root / "source.mp4"
+                # Alternating luminance makes an off-by-one seek conspicuous.
+                run("-f", "lavfi", "-i", f"nullsrc=s=96x64:r={fps},geq=lum='40+mod(N,2)*160':cb=128:cr=128",
+                    "-frames:v", "60", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source))
+                original = source.read_bytes()
+                first = frame_bytes(str(source), 0)
+                second = frame_bytes(str(source), 1)
+                for mode in ("replace", "insert"):
+                    for sample in (0, 31, 59):
+                        with self.subTest(fps=fps, mode=mode, sample=sample):
+                            output = root / "output.mp4"
+                            output.write_bytes(original)
+                            expected = frame_bytes(str(source), sample)
+                            with patch("app.core.video_cover.random.Random.randrange", return_value=sample), \
+                                 patch("app.core.video_cover.random.Random.uniform", side_effect=[1.0, 0.0, 0.0]):
+                                ok, error, _ = RandomCoverProcessor().process(
+                                    str(output), {"enable_gpu": False, "bitrate": "300k", "random_cover_mode": mode}, 54,
+                                )
+                            self.assertTrue(ok, error)
+                            streams = probe_media(str(output))["streams"]
+                            video = next(item for item in streams if item["codec_type"] == "video")
+                            self.assertEqual(int(video["nb_frames"]), 60 + (mode == "insert"))
+                            self.assertFalse(any(item["codec_type"] == "audio" for item in streams))
+                            assert_frame_close(self, frame_bytes(str(output), 0), expected)
+                            assert_frame_close(self, frame_bytes(str(output), 1), first if mode == "insert" else second)
+
+    def test_frame_metadata_avoids_full_decode(self):
+        with patch.object(RandomCoverProcessor, "_probe_output") as probe:
+            self.assertEqual(RandomCoverProcessor._frame_count("unused.mp4", {"nb_frames": "72000"}, 3000, 24), 72000)
+            probe.assert_not_called()
+
+    def test_probe_timeout_and_cancellation_reap_process(self):
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                tracked = []
+                started = time.monotonic()
+                with self.assertRaises(InterruptedError if cancelled else TimeoutError):
+                    RandomCoverProcessor._probe_output(
+                        [sys.executable, "-c", "import time; time.sleep(10)"],
+                        is_cancelled=(lambda: time.monotonic() - started > 0.15) if cancelled else None,
+                        on_process=tracked.append, timeout=0.3,
+                    )
+                self.assertLess(time.monotonic() - started, 3)
+                self.assertIsNotNone(tracked[0].poll())
+                self.assertIsNone(tracked[-1])
+
+    def test_failed_cover_keeps_original_and_cleans_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.mp4"
+            run("-f", "lavfi", "-i", "testsrc2=s=64x64:r=24:d=1", "-c:v", "libx264", str(path))
+            before = path.read_bytes()
+
+            def failed_run(_base, tail, *_args, **_kwargs):
+                Path(tail[-1]).write_bytes(b"partial render")
+                return False, "模拟编码失败"
+
+            with patch("app.core.video_cover.session_for") as session:
+                session.return_value.run.side_effect = failed_run
+                ok, error, _ = RandomCoverProcessor().process(str(path), {"enable_gpu": False}, 9)
+            self.assertFalse(ok)
+            self.assertEqual(error, "模拟编码失败")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
 
     def test_cancelled_cover_keeps_original(self):
         with tempfile.TemporaryDirectory() as directory:

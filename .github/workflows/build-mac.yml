@@ -11,7 +11,7 @@ on:
       release_tag:
         description: "Release tag to upload the dmg to"
         required: true
-        default: "v2.5.0"
+        default: "v2.5.2"
   push:
     tags:
       - "v*"
@@ -52,7 +52,7 @@ jobs:
 
       - name: Test backend regressions
         working-directory: backend
-        run: python -m pytest tests/test_bgm_tracks.py tests/test_audio_duration.py tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py -q
+        run: python -m pytest tests/test_bgm_tracks.py tests/test_audio_duration.py tests/test_runtime_startup.py tests/test_variant_task_service.py tests/test_full_hook.py tests/test_grouped_body_and_cover.py tests/test_subtitle.py tests/test_video_variant.py tests/test_benchmark_session.py tests/test_ffmpeg_diagnostics.py tests/test_hardware_recovery.py -q
 
       # ── Backend → single self-contained binary ───────────────────────────
       - name: Build backend binary

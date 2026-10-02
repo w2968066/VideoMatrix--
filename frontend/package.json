@@ -1,6 +1,6 @@
 {
   "name": "videomatrix-frontend",
-  "version": "2.5.0",
+  "version": "2.5.2",
   "private": true,
   "description": "VideoMatrix desktop video mixing tool",
   "author": "w2968066",
@@ -49,7 +49,9 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*"
+      "dist/main/**/*",
+      "dist/preload/**/*",
+      "dist/renderer/**/*"
     ],
     "extraResources": [
       {

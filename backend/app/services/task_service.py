@@ -8,15 +8,22 @@ import random
 import subprocess
 import shutil
 import tempfile
+import copy
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Callable
 
 from ..core.video_matrix import VideoMatrixCore, SharedMediaCache
 from ..core.video_variant import VideoVariantProcessor, derive_variant_seed
 from ..core.timeline import apply_timeline_totals
 from ..core.video_cover import RandomCoverProcessor
-from ..core.hardware import HardwareSession
+from ..core.hardware import HardwareSession, short_error
 from ..models.schemas import VideoConfig, TaskStatus
+
+
+class TaskBusyError(RuntimeError):
+    """A requested operation conflicts with active production or benchmarking."""
 
 
 class TaskService:
@@ -30,6 +37,7 @@ class TaskService:
         self.variant_processor = VideoVariantProcessor()
         self.cover_processor = RandomCoverProcessor()
         self.variant_processes: Dict[str, set[subprocess.Popen]] = {}
+        self._benchmark_task_id: Optional[str] = None
 
     def _create_log_callback(self, task_id: str) -> Callable:
         def callback(message: str):
@@ -111,8 +119,11 @@ class TaskService:
             status="pending",
             created_at=datetime.now()
         )
-        self.tasks[task_id] = status
-        self.log_buffers[task_id] = []
+        with self.cores_lock:
+            if self._benchmark_task_id is not None:
+                raise TaskBusyError("智能压测尚未结束，请等待压测或停止后的清理完成再启动生产。")
+            self.tasks[task_id] = status
+            self.log_buffers[task_id] = []
 
         thread = threading.Thread(
             target=self._run_pipeline,
@@ -125,9 +136,12 @@ class TaskService:
     def _run_pipeline(self, task_id: str, config: dict):
         status = self.tasks[task_id]
         log_cb = self._create_log_callback(task_id)
-        status.status = "running"
+        with self.cores_lock:
+            if status.status == 'stopped':
+                return
+            status.status = "running"
         status.updated_at = datetime.now()
-
+        hardware_session = None
         try:
             # One verified hardware session is shared by all SKU cores and all
             # post-processing stages. This prevents each stage from probing or
@@ -139,6 +153,9 @@ class TaskService:
                 cancelled=lambda: status.status == "stopped",
             )
             config['_hardware_session'] = hardware_session
+            if status.status == 'stopped':
+                status.message = '已停止，未开始渲染。'
+                return
             tasks = self._get_tasks_from_config(config)
             if not tasks:
                 log_cb(">>> [错误] 找不到任何素材目录！")
@@ -172,6 +189,9 @@ class TaskService:
                     log_cb(f"[{t['name']}] 预检拦截: {msg}")
 
             if not cores:
+                if status.status == 'stopped':
+                    status.message = '已停止，未开始渲染。'
+                    return
                 log_cb(">>> 所有库均被拦截，任务终止。")
                 status.status = "failed"
                 status.message = "所有库预检失败"
@@ -208,17 +228,25 @@ class TaskService:
                     status.updated_at = datetime.now()
 
             if status.status != "stopped":
-                status.status = "completed"
-                log_cb(">>> [完成] 渲染任务队列执行完毕！")
+                self._finalize_status(status)
+                log_cb(f">>> [{'完成' if status.status == 'completed' else '警告' if status.status == 'partial' else '失败'}] {status.message}")
                 for core_name, cnt in success_counts.items():
                     target = next(c.config['target_count'] for c in cores if c.task_name == core_name)
-                    log_cb(f"    [{core_name}] 最终产量: {cnt}/{target}")
+                    log_cb(f"    [{core_name}] 可用视频: {cnt}/{target}（后处理警告见产出列表）")
+            else:
+                status.message = f"已停止，保留 {len(status.output_files)} 个可用视频；未完成项见产出说明。"
+                log_cb(f">>> [停止] {status.message}")
 
         except Exception as e:
-            log_cb(f"[严重错误] 调度引擎崩溃: {str(e)}")
-            status.status = "failed"
-            status.message = str(e)
+            if status.status == 'stopped':
+                status.message = f'已停止，保留 {len(status.output_files)} 个可用视频。'
+            else:
+                log_cb(f"[严重错误] 调度引擎崩溃: {str(e)}")
+                status.status = "failed"
+                status.message = str(e)
         finally:
+            if hardware_session is not None:
+                hardware_session.close()
             status.updated_at = datetime.now()
             with self.cores_lock:
                 self.active_cores.pop(task_id, None)
@@ -234,63 +262,73 @@ class TaskService:
         if "effective_concurrency" in values:
             status.effective_concurrency = max(0, int(values["effective_concurrency"]))
 
+    @staticmethod
+    def _finalize_status(status: TaskStatus):
+        usable = len(status.output_files)
+        warnings = sum(bool(status.output_warnings.get(file)) for file in status.output_files)
+        failed = max(0, status.total - usable)
+        status.status = "failed" if not usable else "partial" if warnings or failed else "completed"
+        status.message = f"完整完成 {usable - warnings}/{status.total}，后处理未完成但已保留 {warnings} 个，失败 {failed} 个。"
+
+    def _register_output(self, status: TaskStatus, path: str, elapsed, warnings):
+        if not os.path.isfile(path):
+            return False
+        with self.cores_lock:
+            if path not in status.output_files:
+                status.output_files.append(path)
+            if elapsed is not None:
+                status.output_elapsed[path] = round(elapsed, 1)
+            if warnings:
+                status.output_warnings[path] = '；'.join(warnings)
+            else:
+                status.output_warnings.pop(path, None)
+        return True
+
     def _render_job(self, core: VideoMatrixCore, idx: int, status: TaskStatus) -> bool:
         if status.status == "stopped" or not core.is_running:
             return False
         result, output_path, elapsed = core.render_single_video(idx, return_result=True)
         output_config = getattr(core, 'output_configs', {}).pop(idx, core.config)
-        if result and output_path and core.config.get('enable_variants') and not output_config.get('_variant_applied'):
-            variant_started = time.time()
-            seed = derive_variant_seed(
-                int(core.config.get('variant_seed') or 0), core.task_name, idx,
-            )
+        if not result or not output_path:
+            return False
+        stages = []
+        if core.config.get('enable_variants') and not output_config.get('_variant_applied'):
+            stages.append(('成品变换', self.variant_processor, derive_variant_seed(
+                int(core.config.get('variant_seed') or 0), core.task_name, idx)))
+        if core.config.get('enable_random_cover'):
+            stages.append(('随机封面', self.cover_processor, derive_variant_seed(
+                int(core.config.get('_cover_seed') or 0), core.task_name + ':cover', idx)))
+        warnings = []
+        for position, (stage, processor, seed) in enumerate(stages):
+            if status.status == 'stopped' or not core.is_running:
+                warnings.append('已停止，' + '、'.join(item[0] for item in stages[position:]) + '未完成')
+                break
+            core.log(f"    [{core.task_name}] 视频 {idx:03d} {stage}处理中…")
+            stage_started = time.time()
             try:
-                ok, error, summary = self.variant_processor.process(
-                    output_path,
-                    output_config,
-                    seed,
-                    is_cancelled=lambda: status.status == "stopped" or not core.is_running,
-                    on_process=lambda process: self._track_variant_process(status.task_id, process),
-                )
-            except Exception as exc:
-                ok, error, summary = False, str(exc), None
-            elapsed = round((elapsed or 0) + time.time() - variant_started, 1)
-            if status.status == "stopped" or not core.is_running:
-                return False
-            if ok:
-                core.log(
-                    f"    [{core.task_name}] 成品变换完成：{summary['segments']} 段独立随机，"
-                    f"镜像 {summary['mirrored']} 段，帧混合 {summary['frame_mixed']} 段，"
-                    f"seed={summary['seed']}"
-                )
-            else:
-                core.log(f"    [{core.task_name}] 成品变换警告：{error or '处理失败'}，已保留原成片。")
-        if result and output_path and core.config.get('enable_random_cover'):
-            cover_started = time.time()
-            seed = derive_variant_seed(
-                int(core.config.get('_cover_seed') or 0), core.task_name + ':cover', idx,
-            )
-            try:
-                ok, error, summary = self.cover_processor.process(
+                ok, error, summary = processor.process(
                     output_path, output_config, seed,
                     is_cancelled=lambda: status.status == "stopped" or not core.is_running,
                     on_process=lambda process: self._track_variant_process(status.task_id, process),
                 )
             except Exception as exc:
                 ok, error, summary = False, str(exc), None
-            elapsed = round((elapsed or 0) + time.time() - cover_started, 1)
-            if status.status == "stopped" or not core.is_running:
-                return False
+            elapsed = (elapsed or 0) + time.time() - stage_started
             if ok:
-                core.log(f"    [{core.task_name}] 随机封面完成（{summary['mode']}）：取样 {summary['sample_time']:.3f} 秒，zoom={summary['zoom']:.3f}")
+                if stage == '随机封面' and summary:
+                    core.log(f"    [{core.task_name}] 随机封面完成（{summary['mode']}）：取样约 {summary['sample_time']:.3f} 秒，zoom={summary['zoom']:.3f}")
+                else:
+                    core.log(f"    [{core.task_name}] {stage}完成")
             else:
-                core.log(f"    [{core.task_name}] 随机封面警告：{error or '处理失败'}，已保留原成片。")
-        if result and output_path and status.task_id in self.tasks:
-            if output_path not in self.tasks[status.task_id].output_files:
-                self.tasks[status.task_id].output_files.append(output_path)
-            if elapsed is not None:
-                self.tasks[status.task_id].output_elapsed[output_path] = elapsed
-        return result
+                warnings.append(f"{stage}未完成：{short_error(error or '处理失败')}")
+                core.log(f"    [{core.task_name}] {stage}警告：{short_error(error or '处理失败')}，已保留原成片。")
+        if not self._register_output(status, output_path, elapsed, warnings):
+            return False
+        if warnings:
+            core.log(f"    [{core.task_name}] 视频 {idx:03d} 已保留，后处理未全部完成，详情见产出列表。")
+        else:
+            core.log(f"    [{core.task_name}] 视频 {idx:03d} 最终完成，总耗时 {(elapsed or 0):.1f} 秒 -> {os.path.basename(output_path)}")
+        return True
 
     def _track_variant_process(self, task_id: str, process: Optional[subprocess.Popen]):
         with self.cores_lock:
@@ -307,17 +345,19 @@ class TaskService:
     def stop_task(self, task_id: str) -> bool:
         if task_id not in self.tasks:
             return False
-        self.tasks[task_id].status = "stopped"
         with self.cores_lock:
-            cores = self.active_cores.get(task_id, [])
-            for core in cores:
-                core.stop()
-            for process in list(self.variant_processes.get(task_id, set())):
-                try:
-                    process.terminate()
-                except Exception:
-                    pass
-            self.variant_processes.pop(task_id, None)
+            if self.tasks[task_id].status not in ('pending', 'running'):
+                return False
+            self.tasks[task_id].status = "stopped"
+            cores = list(self.active_cores.get(task_id, []))
+            processes = list(self.variant_processes.get(task_id, set()))
+        for core in cores:
+            core.stop()
+        for process in processes:
+            try:
+                process.terminate()
+            except Exception:
+                pass
         return True
 
     def stop_all_tasks(self) -> int:
@@ -370,63 +410,296 @@ class TaskService:
         cap_text = '充足/无限' if total_capacity > 9000 else total_capacity
         return {"ok": any(item["ok"] for item in report), "capacity": cap_text, "report": report}
 
+    @staticmethod
+    def _benchmark_cache(directory, snapshot):
+        cache = SharedMediaCache(str(directory))
+        cache.media_cache = copy.deepcopy(snapshot[0])
+        cache.usage_history = set(snapshot[1])
+        return cache
+
+    def _benchmark_release_cores(self, task_id, cores):
+        identities = {id(core) for core in cores}
+        with self.cores_lock:
+            self.active_cores[task_id] = [
+                core for core in self.active_cores.get(task_id, []) if id(core) not in identities
+            ]
+        for core in cores:
+            temporary = getattr(core, 'temp_dir', None)
+            if temporary is not None:
+                try:
+                    temporary.cleanup()
+                except OSError as exc:
+                    self._create_log_callback(task_id)(f'>>> [压测] 临时文件暂未能清理：{exc}')
+
+    def _benchmark_trial(self, config, plans, directory, snapshot, concurrency, visible, label, log):
+        """Measure the same independent job plans through the production renderer."""
+        directory.mkdir(parents=True, exist_ok=True)
+        cache = self._benchmark_cache(directory / 'state', snapshot)
+        trial = TaskStatus(task_id=visible.task_id, task_name=label, status='running',
+                           created_at=datetime.now(), total=len(plans))
+        # Only this private status receives output paths. The visible task tracks
+        # cancellation/processes but must never advertise temporary test videos.
+        reasons, encoders, limits = [], set(), []
+        metrics_lock = threading.Lock()
+
+        def update(values):
+            self._update_acceleration(visible, values)
+            with metrics_lock:
+                if values.get('acceleration_warning'):
+                    reasons.append(str(values['acceleration_warning']))
+                if values.get('effective_concurrency'):
+                    limits.append(int(values['effective_concurrency']))
+
+        def record(message):
+            log(message)
+            with metrics_lock:
+                if '[加速降级]' in message or '[加速恢复]' in message:
+                    reasons.append(message)
+                encoders.update(re.findall(r'\((h264_[a-z0-9_]+|libx264)\)', message))
+
+        session, cores = None, []
+        started = None
+        visible.message = f'{label}：固定 {len(plans)} 条样本，{concurrency} 路并发'
+        log(f'>>> [压测] {visible.message}')
+        try:
+            session = HardwareSession(
+                {**config, 'concurrent_tasks': concurrency}, log=record, update=update,
+                cancelled=lambda: visible.status == 'stopped',
+            )
+            for plan in plans:
+                if visible.status == 'stopped':
+                    break
+                cfg = copy.deepcopy(plan['config'])
+                output = directory / f"job-{plan['slot']:02d}"
+                output.mkdir(exist_ok=True)
+                cfg.update(out_dir=str(output), target_count=1, concurrent_tasks=concurrency,
+                           _selection_seed=plan['seed'], _hardware_session=session)
+                core = VideoMatrixCore(cfg, record, cache)
+                core.hook_pool = [copy.deepcopy(plan['hook'])]
+                for name, pool in plan['pools'].items():
+                    # Production only reads these candidate pools while rendering;
+                    # audio fitting copies its selected clips before truncation.
+                    # Share one frozen snapshot instead of multiplying its memory
+                    # by the number of jobs, which would distort high-load tests.
+                    setattr(core, name, pool)
+                cores.append(core)
+                with self.cores_lock:
+                    if visible.status == 'stopped':
+                        core.stop()
+                    else:
+                        self.active_cores.setdefault(visible.task_id, []).append(core)
+
+            def render(core, plan):
+                if visible.status == 'stopped':
+                    return False
+                return self._render_job(core, plan['index'], trial)
+
+            started = time.perf_counter()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+                futures = [executor.submit(render, core, plan) for core, plan in zip(cores, plans)]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        reasons.append(f'渲染异常：{exc}')
+                        log(f'>>> [压测] {label}渲染异常：{exc}')
+                    if visible.status != 'stopped':
+                        visible.current += 1
+                        visible.progress = min(99, int(visible.current / max(1, visible.total) * 100))
+                        visible.updated_at = datetime.now()
+                        log(f'>>> [压测进度] {visible.current}/{visible.total}（{visible.progress}%）')
+            seconds = time.perf_counter() - started
+        finally:
+            # Executor.__exit__ joins workers before sessions/directories close.
+            if session is not None:
+                session.close()
+            self._benchmark_release_cores(visible.task_id, cores)
+
+        complete = [path for path in trial.output_files if not trial.output_warnings.get(path)]
+        if len(complete) != len(plans):
+            reasons.append(f'完整完成 {len(complete)}/{len(plans)} 条（后处理警告也视为未完整完成）')
+        effective = min(limits, default=concurrency)
+        if effective < concurrency:
+            reasons.append(f'实际有效并发降至 {effective} 路，低于请求的 {concurrency} 路')
+        if visible.status == 'stopped':
+            reasons.append('用户已停止压测')
+        reasons = list(dict.fromkeys(reasons))
+        result = {
+            'concurrent': concurrency, 'sample_count': len(plans),
+            'completed_count': len(complete), 'usable_count': len(trial.output_files),
+            'total_time': round(seconds, 3),
+            'avg_per_video': round(seconds / len(complete), 3) if complete else None,
+            'videos_per_minute': round(len(complete) * 60 / max(seconds, 0.001), 2),
+            'avg_video_elapsed': round(sum(trial.output_elapsed.get(path, 0) for path in complete) / len(complete), 3) if complete else None,
+            'stable': not reasons, 'reason': '；'.join(reasons), 'reasons': reasons,
+            'effective_concurrency': effective, 'encoders': sorted(encoders),
+        }
+        log(f">>> [压测] {label}：完整 {len(complete)}/{len(plans)} 条，共 {seconds:.2f} 秒，"
+            f"{result['videos_per_minute']:.2f} 条/分钟" + ('；不参与推荐：' + result['reason'] if reasons else '；稳定完成'))
+        return result
+
     def get_benchmark(self, config: VideoConfig) -> dict:
         raw_config = self._normalize_config(config.model_dump())
-        tasks = self._get_tasks_from_config(raw_config)
-        if not tasks:
-            return {"error": "素材不足以支撑压测"}
+        task_id = 'benchmark-' + str(uuid.uuid4())
+        visible = TaskStatus(task_id=task_id, task_name='智能压测', status='running', created_at=datetime.now())
+        with self.cores_lock:
+            if (self._benchmark_task_id is not None
+                    or any(task.status in ('pending', 'running') for task in self.tasks.values())
+                    or any(self.active_cores.values()) or any(self.variant_processes.values())):
+                raise TaskBusyError('已有生产任务或压测正在运行/停止清理，请等待结束后再压测。')
+            self._benchmark_task_id = task_id
+            self.tasks[task_id] = visible
+            self.log_buffers[task_id] = []
+        log = self._create_log_callback(task_id)
+        root, output_base, templates = None, None, []
+        response = {'task_id': task_id, 'sample_count': 0, 'note': '', 'results': {},
+                    'verification_results': {}, 'best_concurrent': None, 'best_result': None}
+        try:
+            visible.message = '正在预检素材并冻结相同的压测样本'
+            log('>>> [压测] 正在准备固定素材；各档使用相同样本、输出盘和完整后处理。')
+            tasks = self._get_tasks_from_config(raw_config)
+            output_base = Path(raw_config['base_out_dir']).resolve()
+            output_base.mkdir(parents=True, exist_ok=True)
+            root = Path(tempfile.mkdtemp(prefix='.videomatrix-benchmark-', dir=str(output_base))).resolve()
+            with self.shared_cache.lock:
+                snapshot = (copy.deepcopy(self.shared_cache.media_cache), set(self.shared_cache.usage_history))
+            prepared_cache = self._benchmark_cache(root / 'prepared-state', snapshot)
+            master_seed = random.SystemRandom().randrange(0, 2**63)
+            pool_names = ('body_pool', 'body_group_pools', 'bgm_pool', 'bgm_track_pools', 'voice_pool')
+            for task in tasks:
+                if visible.status == 'stopped':
+                    break
+                cfg = copy.deepcopy(raw_config)
+                cfg.update(task_name=task['name'], hook_dir=task['hook_dir'], body_dirs=task['body_dirs'],
+                           out_dir=str(root / 'prepare'), target_count=8,
+                           _selection_seed=derive_variant_seed(master_seed, task['name'], 0))
+                core = VideoMatrixCore(cfg, log, prepared_cache)
+                templates.append(core)
+                with self.cores_lock:
+                    if visible.status == 'stopped':
+                        core.stop()
+                    else:
+                        self.active_cores.setdefault(task_id, []).append(core)
+                ok, message = core.pre_flight_check()
+                if not ok:
+                    log(f'>>> [压测] {task["name"]}预检未通过：{message}')
+                    core.hook_pool = []
+                elif cfg.get('enable_srt'):
+                    cfg['_benchmark_srt_files'] = sorted(core._scan_files(cfg['srt_dir'], ('.srt',)))
 
-        results = {}
-        log_cb = lambda x: None
+            # Select Hooks once in the same round-robin order as production.
+            # Each job gets its own RNG, so thread scheduling cannot change its
+            # Body/BGM/voice/subtitle choices when concurrency changes.
+            plans, indices, cycles, frozen_pools = [], {}, {}, {}
+            while len(plans) < 8 and visible.status != 'stopped':
+                added = False
+                for template in templates:
+                    if len(plans) >= 8:
+                        break
+                    if not template.hook_pool:
+                        continue
+                    key = id(template)
+                    cfg = template.config
+                    if key not in frozen_pools:
+                        frozen_pools[key] = {name: copy.deepcopy(getattr(template, name)) for name in pool_names}
+                    if cfg.get('hook_full_duration'):
+                        if not cycles.get(key):
+                            cycles[key] = list(template.hook_pool)
+                            template.rng.shuffle(cycles[key])
+                        hook = cycles[key].pop()
+                    elif cfg['hook_r'] >= 0.99:
+                        hook = template.rng.choice(template.hook_pool)
+                    else:
+                        hook = template.hook_pool.pop()
+                    index = indices.get(key, 0) + 1
+                    indices[key] = index
+                    plans.append({
+                        'slot': len(plans) + 1, 'index': index,
+                        'config': copy.deepcopy(cfg), 'hook': copy.deepcopy(hook),
+                        'seed': derive_variant_seed(master_seed, template.task_name, index),
+                        'pools': frozen_pools[key],
+                    })
+                    added = True
+                if not added:
+                    break
+            self._benchmark_release_cores(task_id, templates)
+            templates.clear()
+            sample_count = len(plans)
+            response['sample_count'] = sample_count
+            if visible.status == 'stopped':
+                response['cancelled'] = True
+                response['error'] = '智能压测已停止。'
+                return response
+            if not plans:
+                visible.status, visible.message = 'failed', '没有可用素材支撑压测。'
+                response['error'] = visible.message
+                return response
+            covered = len({plan['config']['task_name'] for plan in plans})
+            response['note'] = f'固定 {sample_count} 条样本，覆盖 {covered} 个素材库；预热不计时，以复测整批完成时间选优。'
+            if sample_count < 8:
+                response['note'] += '剩余可用 Hook 不足 8 条，样本不足，不自动推荐并发。'
+            log('>>> [压测] ' + response['note'])
+            visible.total = 1 + sample_count * 6
+            with prepared_cache.lock:
+                trial_snapshot = (copy.deepcopy(prepared_cache.media_cache), set(snapshot[1]))
 
-        for n in range(1, 5):
-            test_cfg = raw_config.copy()
-            benchmark_dir = tempfile.mkdtemp(prefix="videomatrix-benchmark-")
-            test_cfg.update({
-                'hook_dir': tasks[0]['hook_dir'],
-                'body_dirs': tasks[0]['body_dirs'],
-                'body_groups': raw_config.get('body_groups') or [],
-                'out_dir': benchmark_dir,
-                'target_count': 2,
-                'task_name': 'Test'
-            })
+            def trial(n, label, subset=plans):
+                return self._benchmark_trial(raw_config, subset, root / label, trial_snapshot, n, visible, label, log)
+
+            trial(1, '预热', plans[:1])
+            for n in range(1, 5):
+                if visible.status == 'stopped':
+                    break
+                response['results'][n] = trial(n, f'初测-{n}路')
+            if visible.status != 'stopped':
+                stable = [n for n, result in response['results'].items() if result['stable']]
+                finalists = sorted(stable, key=lambda n: response['results'][n]['total_time'])[:2]
+                visible.total = 1 + sample_count * (4 + len(finalists))
+                # Reverse the original order to reduce consistent warm/cache bias.
+                for n in sorted(finalists, reverse=True):
+                    if visible.status == 'stopped':
+                        break
+                    response['verification_results'][n] = trial(n, f'复测-{n}路')
+            if visible.status == 'stopped':
+                response['cancelled'] = True
+                response['error'] = '智能压测已停止，未改变并发设置。'
+                visible.message = '智能压测已停止，等待临时样片清理完成。'
+                return response
+            verified = {n: result for n, result in response['verification_results'].items() if result['stable']}
+            if verified and sample_count >= 8:
+                fastest = min(result['total_time'] for result in verified.values())
+                best = min(n for n, result in verified.items() if result['total_time'] <= fastest * 1.05)
+                response['best_concurrent'], response['best_result'] = best, verified[best]
+                visible.status = 'completed'
+                visible.message = f'压测完成，复测推荐 {best} 路；5% 以内的差距优先较低并发。'
+            else:
+                visible.status = 'partial'
+                visible.message = '压测完成，但样本不足或没有稳定的完整复测结果，不自动调整并发。'
+                response['note'] += ' 没有足够可信的结果，保留当前并发设置。'
+            visible.progress = 100
+            log('>>> [压测完成] ' + visible.message)
+            return response
+        except Exception as exc:
+            if visible.status != 'stopped':
+                visible.status, visible.message = 'failed', f'智能压测失败：{exc}'
+            log('>>> [压测] ' + visible.message)
+            raise
+        finally:
             try:
-                os.makedirs(test_cfg['out_dir'], exist_ok=True)
-                # Never consume production usage history during a benchmark.
-                core = VideoMatrixCore(test_cfg, log_cb, SharedMediaCache(benchmark_dir))
-                if not core.pre_flight_check()[0]:
-                    return {"error": "素材不足以支撑压测"}
-                benchmark_status = TaskStatus(
-                    task_id=f"benchmark-{n}", task_name="Benchmark", status="running",
-                    created_at=datetime.now(), total=n,
-                )
-
-                start_t = time.time()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
-                    fs = [ex.submit(self._render_job, core, i, benchmark_status)
-                          for i in range(1, n + 1)]
-                    results_raw = [future.result() for future in fs]
-                elapsed = time.time() - start_t
-                successful = [item for item in results_raw if item]
-                if len(successful) != n:
-                    continue
-                t_per_v = elapsed / n
-                results[n] = {
-                    "concurrent": n,
-                    "total_time": round(elapsed, 2),
-                    "avg_per_video": round(t_per_v, 2)
-                }
+                self._benchmark_release_cores(task_id, templates)
+                if root is not None and root.exists():
+                    if root.resolve() != root or root.parent != output_base or not root.name.startswith('.videomatrix-benchmark-'):
+                        log(f'>>> [压测] 临时路径校验失败，已保留目录：{root}')
+                    else:
+                        shutil.rmtree(root)
+            except OSError as exc:
+                log(f'>>> [压测] 临时目录未能清理：{root}（{exc}）')
             finally:
-                shutil.rmtree(benchmark_dir, ignore_errors=True)
-
-        if not results:
-            return {"error": "压测期间没有成功完成可比较的成品"}
-        best_n = min(results, key=lambda k: results[k]["avg_per_video"])
-        return {
-            "results": results,
-            "best_concurrent": best_n,
-            "best_result": results[best_n]
-        }
+                visible.updated_at = datetime.now()
+                with self.cores_lock:
+                    self.active_cores.pop(task_id, None)
+                    self.variant_processes.pop(task_id, None)
+                    self._benchmark_task_id = None
 
 
 # 全局单例

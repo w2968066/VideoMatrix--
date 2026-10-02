@@ -8,7 +8,7 @@ from ..models.schemas import (
     CreateTaskRequest, CreateTaskResponse, StopTaskRequest,
     TaskStatus, ScanRequest, ScanResponse, ProbeResult, VideoConfig
 )
-from ..services.task_service import task_service
+from ..services.task_service import task_service, TaskBusyError
 from ..core.ffmpeg import probe_media, extract_media_info, extract_audio_duration
 
 router = APIRouter()
@@ -16,7 +16,10 @@ router = APIRouter()
 
 @router.post("/tasks", response_model=CreateTaskResponse)
 def create_task(req: CreateTaskRequest):
-    task_id = task_service.create_task(req.config)
+    try:
+        task_id = task_service.create_task(req.config)
+    except TaskBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return CreateTaskResponse(task_id=task_id, message="任务已创建")
 
 
@@ -72,7 +75,7 @@ async def stream_logs(task_id: str):
                 last_len = len(logs)
 
             current = task_service.get_task(task_id)
-            if current and current.status in ("completed", "failed", "stopped"):
+            if current and current.status in ("completed", "partial", "failed", "stopped"):
                 yield f"data: {json.dumps({'status': current.status, 'progress': current.progress}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
                 break
@@ -122,7 +125,10 @@ def probe_file(file_path: str):
 
 @router.post("/benchmark")
 def benchmark(config: VideoConfig):
-    return task_service.get_benchmark(config)
+    try:
+        return task_service.get_benchmark(config)
+    except TaskBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/preflight")

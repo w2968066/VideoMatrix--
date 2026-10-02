@@ -185,7 +185,7 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
 export interface TaskStatus {
   task_id: string
   task_name: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped'
+  status: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'stopped'
   progress: number
   current: number
   total: number
@@ -195,6 +195,7 @@ export interface TaskStatus {
   updated_at?: string
   output_files: string[]
   output_elapsed?: Record<string, number>
+  output_warnings?: Record<string, string>
   acceleration?: string
   acceleration_warning?: string
   effective_concurrency?: number

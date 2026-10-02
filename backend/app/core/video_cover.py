@@ -1,34 +1,81 @@
-"""Replace (not prepend) a finished video's first frame with a random cover frame."""
+"""Replace or prepend a finished video's first frame with a random cover frame."""
 from __future__ import annotations
 
+import json
+import os
 import random
 import subprocess
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from .ffmpeg import FFMPEG, FFPROBE, probe_media, run_cmd
+from .ffmpeg import FFMPEG, FFPROBE
 from .video_variant import VideoVariantProcessor
 from .hardware import session_for
 
 
 class RandomCoverProcessor:
     @staticmethod
-    def _frame_count(path: str, video: dict, duration: float, fps_value: float) -> int:
+    def _probe_output(command, is_cancelled=None, on_process=None, timeout=15.0) -> str:
+        """Keep even metadata/counting work cancellable and bounded."""
+        if is_cancelled and is_cancelled():
+            raise InterruptedError("已停止")
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        try:
+            if on_process:
+                on_process(process)
+            deadline = time.monotonic() + timeout
+            while True:
+                if is_cancelled and is_cancelled():
+                    raise InterruptedError("已停止")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("媒体探测超时")
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if is_cancelled and is_cancelled():
+                raise InterruptedError("已停止")
+            if process.returncode != 0:
+                raise RuntimeError("媒体探测失败：" + (stderr.strip()[-400:] or str(process.returncode)))
+            return stdout
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+            if on_process:
+                on_process(None)
+
+    @staticmethod
+    def _probe_media(path: str, is_cancelled=None, on_process=None) -> dict:
+        return json.loads(RandomCoverProcessor._probe_output([
+            FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path,
+        ], is_cancelled, on_process))
+
+    @staticmethod
+    def _frame_count(path: str, video: dict, duration: float, fps_value: float,
+                     is_cancelled=None, on_process=None) -> int:
+        if is_cancelled and is_cancelled():
+            raise InterruptedError("已停止")
         value = video.get("nb_frames")
         try:
             if value and int(value) > 0:
                 return int(value)
         except (TypeError, ValueError):
             pass
-        result = run_cmd([
+        output = RandomCoverProcessor._probe_output([
             FFPROBE, "-v", "error", "-count_frames", "-select_streams", "v:0",
             "-show_entries", "stream=nb_read_frames", "-of", "default=nw=1:nk=1", path,
-        ])
+        ], is_cancelled, on_process, timeout=120.0)
         try:
-            count = int((result.stdout or "").strip()) if result else 0
+            count = int(output.strip())
             if count > 0:
                 return count
         except (TypeError, ValueError):
@@ -43,7 +90,10 @@ class RandomCoverProcessor:
         is_cancelled: Callable[[], bool] | None = None,
         on_process: Callable[[Optional[subprocess.Popen]], None] | None = None,
     ) -> tuple[bool, str | None, dict]:
-        info = probe_media(input_path)
+        try:
+            info = self._probe_media(input_path, is_cancelled, on_process)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return False, str(exc), {}
         if not info:
             return False, "无法探测基础成片", {}
         video = next((item for item in info.get("streams", []) if item.get("codec_type") == "video"), None)
@@ -56,7 +106,10 @@ class RandomCoverProcessor:
             fps_value = float(fps.split("/")[0]) / float(fps.split("/")[1]) if "/" in fps else float(fps)
         except (ValueError, ZeroDivisionError):
             fps, fps_value = str(config.get("fps", "30")), float(config.get("fps", 30))
-        frame_count = self._frame_count(input_path, video, duration, fps_value)
+        try:
+            frame_count = self._frame_count(input_path, video, duration, fps_value, is_cancelled, on_process)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return False, str(exc), {}
         if width <= 0 or height <= 0 or fps_value <= 0 or frame_count < 2:
             return False, "基础成片时长或画面参数异常", {}
 
@@ -67,6 +120,9 @@ class RandomCoverProcessor:
         frame_duration = 1 / fps_value
         sample_frame = rng.randrange(frame_count)
         sample_time = sample_frame / fps_value
+        # FFmpeg seeks in microseconds. Stay just before the target boundary so
+        # rational rates (e.g. 30000/1001) cannot round the last frame past EOF.
+        seek_time = max(0.0, sample_time - 0.000001)
         zoom = rng.uniform(1.02, 1.18)
         scaled_w = max(width, int(width * zoom) // 2 * 2)
         scaled_h = max(height, int(height * zoom) // 2 * 2)
@@ -85,13 +141,18 @@ class RandomCoverProcessor:
                 f"trim=end_frame={output_frame_count},setsar=1[base]"
             )
         filter_complex = (
-            f"[0:v]trim=start_frame={sample_frame}:end_frame={sample_frame + 1},setpts=PTS-STARTPTS,"
+            "[1:v]trim=end_frame=1,setpts=PTS-STARTPTS,"
             f"scale={scaled_w}:{scaled_h},crop={width}:{height}:{crop_x:.3f}:{crop_y:.3f},setsar=1,"
             "trim=end_frame=1[cover];"
             f"{base_video};[base][cover]overlay=0:0:eof_action=pass:repeatlast=0:shortest=0[vout]"
         )
         base = [
-            FFMPEG, "-y", "-copyts", "-i", str(source), "-filter_complex", filter_complex,
+            # Independent input seeking prevents the main branch from buffering
+            # every earlier frame while a shared decoder waits for a late cover.
+            # Keep decoder auto-threading: fixed low limits regress single-job
+            # throughput; the shared hardware session controls job concurrency.
+            FFMPEG, "-y", "-copyts", "-i", str(source),
+            "-ss", f"{seek_time:.9f}", "-i", str(source), "-filter_complex", filter_complex,
             "-map", "[vout]",
             "-r", fps, "-frames:v", str(output_frame_count), "-pix_fmt", "yuv420p",
         ]
@@ -123,9 +184,15 @@ class RandomCoverProcessor:
             VideoVariantProcessor._unlink_with_retry(temp_path)
             return False, error or "随机封面封装失败", summary
 
-        checked = probe_media(str(temp_path))
-        checked_video = next((item for item in (checked or {}).get("streams", []) if item.get("codec_type") == "video"), None)
-        checked_frames = self._frame_count(str(temp_path), checked_video or {}, duration, fps_value) if checked_video else 0
+        try:
+            checked = self._probe_media(str(temp_path), is_cancelled, on_process)
+            checked_video = next((item for item in (checked or {}).get("streams", []) if item.get("codec_type") == "video"), None)
+            checked_frames = self._frame_count(
+                str(temp_path), checked_video or {}, duration, fps_value, is_cancelled, on_process,
+            ) if checked_video else 0
+        except (OSError, RuntimeError, ValueError) as exc:
+            VideoVariantProcessor._unlink_with_retry(temp_path)
+            return False, str(exc), summary
         if (
             not checked or not temp_path.exists() or temp_path.stat().st_size < 1024
             or not checked_video or int(checked_video.get("width") or 0) != width

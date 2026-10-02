@@ -207,10 +207,11 @@ class VideoMatrixCore:
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
     def process_srt(self, srt_dir: str, duration_sec: float, offset_sec: float = 0.0) -> Optional[str]:
-        srt_files = self._scan_files(srt_dir, ('.srt',))
+        frozen_files = self.config.get('_benchmark_srt_files')
+        srt_files = list(frozen_files) if frozen_files is not None else self._scan_files(srt_dir, ('.srt',))
         if not srt_files:
             return None
-        srt_path = random.choice(srt_files)
+        srt_path = self.rng.choice(srt_files)
         try:
             with open(srt_path, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
@@ -798,7 +799,7 @@ class VideoMatrixCore:
             from .hardware import short_error
             self.log(f"    [{self.task_name}] 视频 {task_idx:03d} 失败：{short_error(error)}")
 
-        if success and self.is_running:
+        if success:
             if not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 输出异常（文件过小或不存在），可能编码失败")
@@ -811,7 +812,7 @@ class VideoMatrixCore:
             self.last_output_path = out_path
             self.last_elapsed = round(elapsed_time, 1)
             now_str = datetime.now().strftime("%H:%M:%S")
-            self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 完成，耗时 {elapsed_time:.1f} 秒 -> {out_name}")
+            self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 基础混剪完成，耗时 {elapsed_time:.1f} 秒 -> {out_name}")
             return (True, out_path, self.last_elapsed) if return_result else True
         return (False, None, None) if return_result else False
 

@@ -87,7 +87,7 @@ class BodyGroup(BaseModel):
 class TaskStatus(BaseModel):
     task_id: str
     task_name: str
-    status: Literal["pending", "running", "completed", "failed", "stopped"]
+    status: Literal["pending", "running", "completed", "partial", "failed", "stopped"]
     progress: int = Field(default=0, ge=0, le=100)
     current: int = Field(default=0, ge=0)
     total: int = Field(default=0, ge=0)
@@ -97,6 +97,7 @@ class TaskStatus(BaseModel):
     updated_at: Optional[datetime] = None
     output_files: List[str] = Field(default_factory=list)
     output_elapsed: Dict[str, float] = Field(default_factory=dict)
+    output_warnings: Dict[str, str] = Field(default_factory=dict)
     acceleration: str = ""
     acceleration_warning: str = ""
     effective_concurrency: int = 0

@@ -5,10 +5,50 @@ import subprocess
 import tempfile
 import re
 import time
+import shutil
+import threading
+import uuid
+from pathlib import Path
 from typing import Optional, Tuple, List
 
 
 MEDIA_END_SAFETY_MARGIN = 0.2
+_failure_log_lock = threading.Lock()
+
+
+def _failure_detail(errors, command, reason=None):
+    """Keep full stderr on disk and a bounded, root-cause-first in-memory excerpt."""
+    errors.flush()
+    errors.seek(0, os.SEEK_END)
+    size = errors.tell()
+    errors.seek(0)
+    detail = errors.read(65536).decode('utf-8', errors='replace')
+    if size > 65536:
+        errors.seek(max(65536, size - 8192))
+        detail += '\n…（完整输出见日志）…\n' + errors.read().decode('utf-8', errors='replace')
+    if reason:
+        detail = reason + '\n' + detail
+    try:
+        root = Path(os.environ.get('APPDATA') or os.path.expanduser('~')) / 'VideoMatrix' / 'logs'
+        with _failure_log_lock:
+            root.mkdir(parents=True, exist_ok=True)
+            target = root / f'ffmpeg-error-{time.time_ns()}-{uuid.uuid4().hex[:8]}.log'
+            with target.open('xb') as saved:
+                saved.write((json.dumps(command, ensure_ascii=False) + '\n\n').encode('utf-8'))
+                if reason:
+                    saved.write((reason + '\n').encode('utf-8'))
+                errors.seek(0)
+                shutil.copyfileobj(errors, saved)
+            # Rotate only logs created by this feature, not other application files.
+            for old in sorted(root.glob('ffmpeg-error-*.log'), key=lambda file: file.name)[:-20]:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        detail += f'\n完整日志：{target}'
+    except OSError:
+        pass
+    return detail or 'FFmpeg 执行失败'
 
 
 def _find_tool(name: str) -> str:
@@ -272,15 +312,14 @@ def run_process(command, is_cancelled=None, on_process=None, timeout=None, cwd=N
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait(timeout=3)
-                        return False, '已停止' if cancelled else 'FFmpeg timeout'
+                        return False, '已停止' if cancelled else _failure_detail(errors, command, 'FFmpeg timeout')
                     try:
                         process.wait(timeout=0.2)
                     except subprocess.TimeoutExpired:
                         pass
-                errors.seek(0, os.SEEK_END)
-                errors.seek(max(0, errors.tell() - 8000))
-                detail = errors.read().decode('utf-8', errors='replace')
-                return process.returncode == 0, detail or None
+                if process.returncode == 0:
+                    return True, None
+                return False, _failure_detail(errors, command)
             finally:
                 if on_process:
                     on_process(None)
