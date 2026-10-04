@@ -19,6 +19,7 @@ from ..core.video_variant import VideoVariantProcessor, derive_variant_seed
 from ..core.timeline import apply_timeline_totals
 from ..core.video_cover import RandomCoverProcessor
 from ..core.hardware import HardwareSession, short_error
+from ..core.output_settings import validate_output_settings
 from ..models.schemas import VideoConfig, TaskStatus
 
 
@@ -51,6 +52,9 @@ class TaskService:
 
     def _normalize_config(self, config: dict) -> dict:
         normalized = config.copy()
+        validate_output_settings(normalized)
+        if (normalized.get('random_resolution_enabled') or normalized.get('random_bitrate_enabled')) and normalized.get('_output_seed') is None:
+            normalized['_output_seed'] = random.SystemRandom().randrange(0, 2**63)
         body_dirs = normalized.get('body_dirs') or []
         if isinstance(body_dirs, str):
             body_dirs = [p.strip() for p in body_dirs.split(';') if p.strip()]
@@ -295,10 +299,10 @@ class TaskService:
         if core.config.get('enable_variants') and not output_config.get('_variant_applied'):
             stages.append(('成品变换', self.variant_processor, derive_variant_seed(
                 int(core.config.get('variant_seed') or 0), core.task_name, idx)))
-        if core.config.get('enable_random_cover'):
+        if core.config.get('enable_random_cover') and not output_config.get('_cover_applied'):
             stages.append(('随机封面', self.cover_processor, derive_variant_seed(
                 int(core.config.get('_cover_seed') or 0), core.task_name + ':cover', idx)))
-        warnings = []
+        warnings = list(output_config.get('_variant_warnings') or []) + list(output_config.get('_output_warnings') or [])
         for position, (stage, processor, seed) in enumerate(stages):
             if status.status == 'stopped' or not core.is_running:
                 warnings.append('已停止，' + '、'.join(item[0] for item in stages[position:]) + '未完成')

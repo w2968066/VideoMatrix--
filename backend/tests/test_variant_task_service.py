@@ -34,6 +34,20 @@ class UnexpectedVariantProcessor:
 
 
 class VariantTaskServiceTests(unittest.TestCase):
+    def test_fused_fallback_warning_is_visible_without_second_transform(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = str(Path(temp_dir) / 'fallback.mp4')
+            Path(output_path).write_bytes(b'base-preserved')
+            service = TaskService()
+            service.variant_processor = UnexpectedVariantProcessor()
+            status = TaskStatus(task_id='fused-fallback', task_name='demo', status='running', created_at=datetime.now())
+            core = FakeCore(output_path)
+            core.output_configs = {1: {**core.config, '_variant_applied': {'skipped': True},
+                                       '_variant_warnings': ['变换失败，已回退基础混剪']}}
+            self.assertTrue(service._render_job(core, 1, status))
+            self.assertIn('回退基础混剪', status.output_warnings[output_path])
+            self.assertFalse(any('最终完成' in message for message in core.messages))
+
     def test_fused_variant_is_not_applied_twice(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = str(Path(temp_dir) / "fused.mp4")

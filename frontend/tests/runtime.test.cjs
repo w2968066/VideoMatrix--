@@ -276,6 +276,102 @@ test('output defaults are 1080p 8000k 30fps GPU enabled, saved choices remain in
   assert.equal(config.enable_gpu, false)
 })
 
+test('random output settings default off and persist independently of variants and fixed values', () => {
+  let saved = null
+  global.localStorage = { getItem: () => saved, setItem: (key, value) => { if (key === 'vm-config') saved = value } }
+  let { useStore } = load('src/renderer/store.ts')
+  const defaults = useStore.getState().config
+  assert.equal(defaults.random_resolution_enabled, false)
+  assert.equal(defaults.random_resolution_min, 1080)
+  assert.equal(defaults.random_resolution_max, 1440)
+  assert.equal(defaults.random_bitrate_enabled, false)
+  assert.equal(defaults.random_bitrate_min, 8000)
+  assert.equal(defaults.random_bitrate_max, 14000)
+  useStore.getState().setConfig({ resolution: '1920*1080', bitrate: '12000k', enable_variants: false,
+    random_resolution_enabled: true, random_resolution_min: '1098', random_resolution_max: '1440',
+    random_bitrate_enabled: true, random_bitrate_min: '9000', random_bitrate_max: '16000' })
+  useStore.getState().setConfig({ random_resolution_enabled: false, random_bitrate_enabled: false })
+  ;({ useStore } = load('src/renderer/store.ts'))
+  const config = useStore.getState().config
+  assert.equal(config.enable_variants, false)
+  assert.equal(config.resolution, '1920*1080')
+  assert.equal(config.bitrate, '12000k')
+  assert.equal(config.random_resolution_enabled, false)
+  assert.equal(config.random_bitrate_enabled, false)
+  assert.equal(config.random_resolution_min, '1098')
+  assert.equal(config.random_resolution_max, '1440')
+  assert.equal(config.random_bitrate_min, '9000')
+  assert.equal(config.random_bitrate_max, '16000')
+})
+
+test('random requests normalize active integers and discard hidden invalid ranges without changing saved values', () => {
+  global.localStorage = { getItem: () => null, setItem: () => {} }
+  const { useStore } = load('src/renderer/store.ts')
+  const { normalizeConfigForRequest } = load('src/renderer/api/client.ts')
+  const base = useStore.getState().config
+  const active = normalizeConfigForRequest({ ...base, enable_variants: false,
+    random_resolution_enabled: true, random_resolution_min: '1080', random_resolution_max: '1440',
+    random_bitrate_enabled: true, random_bitrate_min: '8000', random_bitrate_max: '14000' })
+  assert.equal(active.enable_variants, false)
+  assert.equal(active.random_resolution_enabled, true)
+  assert.equal(active.random_bitrate_enabled, true)
+  for (const [key, value] of Object.entries({ random_resolution_min: 1080, random_resolution_max: 1440,
+    random_bitrate_min: 8000, random_bitrate_max: 14000 })) assert.equal(active[key], value)
+  const hidden = { ...active, random_resolution_enabled: false, random_bitrate_enabled: false,
+    random_resolution_min: '', random_resolution_max: 'invalid', random_bitrate_min: '-1', random_bitrate_max: '0', bitrate: '12000k' }
+  const inactive = normalizeConfigForRequest(hidden)
+  assert.equal(inactive.random_resolution_min, 1080)
+  assert.equal(inactive.random_resolution_max, 1440)
+  assert.equal(inactive.random_bitrate_min, 8000)
+  assert.equal(inactive.random_bitrate_max, 14000)
+  assert.equal(inactive.bitrate, '12000k')
+  assert.equal(inactive.resolution, '1080*1920')
+  assert.equal(hidden.random_resolution_min, '')
+  assert.equal(hidden.random_bitrate_min, '-1')
+})
+
+test('random output validation enforces exact even aspect ratios, active ranges and an 8K size budget', () => {
+  global.localStorage = { getItem: () => null, setItem: () => {} }
+  const base = load('src/renderer/store.ts').useStore.getState().config
+  const { getRandomResolutionOptions, validateRandomOutputConfig, normalizeConfigForRequest } = load('src/renderer/api/client.ts')
+  for (const resolution of ['1080*1920', '1920x1080', ' 1080 × 1920 ']) {
+    const options = getRandomResolutionOptions(resolution, 1080, 1440)
+    assert.equal(options.count, 21)
+    assert.equal(options.step, 18)
+    assert.equal(options.first, 1080)
+    assert.equal(options.last, 1440)
+    assert.equal(Math.max(options.maxWidth, options.maxHeight), 2560)
+  }
+  const active = { ...base, random_resolution_enabled: true, random_bitrate_enabled: true }
+  assert.equal(validateRandomOutputConfig(active), null)
+  assert.equal(validateRandomOutputConfig({ ...active, random_resolution_min: 1440, random_resolution_max: 1440,
+    random_bitrate_min: 100, random_bitrate_max: 200000 }), null)
+  for (const [patch, message] of [
+    [{ random_resolution_min: 1080.5 }, /整数/], [{ random_resolution_min: '' }, /整数/],
+    [{ random_resolution_min: 127 }, /整数/], [{ random_resolution_max: 7681 }, /整数/],
+    [{ random_resolution_min: 1440, random_resolution_max: 1080 }, /下限不能大于上限/],
+    [{ random_resolution_min: 1081, random_resolution_max: 1081 }, /没有保持当前宽高比/],
+    [{ resolution: 'invalid' }, /比例依据/], [{ resolution: '0*1920' }, /比例依据/],
+    [{ resolution: '2*2000000' }, /尺寸预算/],
+    [{ resolution: '1*1', random_resolution_min: 6000, random_resolution_max: 6000 }, /尺寸预算/],
+    [{ random_bitrate_min: 99 }, /整数/], [{ random_bitrate_max: 200001 }, /整数/],
+    [{ random_bitrate_min: '8000.1' }, /整数/], [{ random_bitrate_max: '' }, /整数/],
+    [{ random_bitrate_min: 14000, random_bitrate_max: 8000 }, /下限不能大于上限/],
+  ]) {
+    assert.match(validateRandomOutputConfig({ ...active, ...patch }), message)
+    assert.throws(() => normalizeConfigForRequest({ ...active, ...patch }), message)
+  }
+  assert.equal(validateRandomOutputConfig({ ...active, resolution: '1*1', random_resolution_min: 5948, random_resolution_max: 5948 }), null)
+  assert.match(validateRandomOutputConfig({ ...active, resolution: '1*1', random_resolution_min: 5950, random_resolution_max: 5950 }), /尺寸预算/)
+})
+
+test('desktop prepare allowlist forwards all six random output settings', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../src/main/main.ts'), 'utf8')
+  const fields = source.match(/const PREPARE_FIELDS = new Set\(\[([\s\S]*?)\]\)/)[1]
+  for (const name of ['random_resolution_enabled', 'random_resolution_min', 'random_resolution_max',
+    'random_bitrate_enabled', 'random_bitrate_min', 'random_bitrate_max']) assert(fields.includes(`'${name}'`))
+})
+
 test('full Body flags survive request normalization and ignore disabled duration values', () => {
   global.localStorage = { getItem: () => null, setItem: () => {} }
   const { useStore } = load('src/renderer/store.ts')
@@ -316,4 +412,75 @@ test('real store shows backend logs once, retains cursor after clear and capture
   assert.deepEqual(useStore.getState().logs, [])
   useStore.getState().setTasks([{ ...task, status: 'completed', log_lines: [...task.log_lines, '[加速降级] CPU'] }])
   assert.deepEqual(useStore.getState().logs, ['[加速降级] CPU'])
+})
+
+test('dedup V2 settings migrate, persist and survive master-toggle changes', () => {
+  let saved = JSON.stringify({ enable_variants: true, variant_strength: 'balanced', variant_hook: false,
+    variant_body: true, variant_frame_mix: true })
+  global.localStorage = {
+    getItem: key => { assert.equal(key, 'vm-config'); return saved },
+    setItem: (key, value) => { assert.equal(key, 'vm-config'); saved = value },
+  }
+  let { useStore } = load('src/renderer/store.ts')
+  let config = useStore.getState().config
+  assert.equal(config.variant_crop, true)
+  assert.equal(config.variant_color, false)
+  assert.equal(config.variant_mirror, false)
+  assert.equal(config.variant_frame_mix, false, 'legacy frame mix is migrated off')
+  assert.equal(config.variant_blend_enabled, false)
+  assert.equal(config.variant_blend_path, '')
+  assert.equal(config.variant_blend_opacity, .03)
+  assert.equal(config.variant_blend_eof, 'loop')
+
+  useStore.getState().setConfig({ variant_strength: 'strong', variant_hook: false, variant_body: false,
+    variant_crop: false, variant_color: true, variant_mirror: true, variant_blend_enabled: true,
+    variant_blend_path: 'C:\\video\\blend.mp4', variant_blend_opacity: .08, variant_blend_eof: 'freeze',
+    variant_frame_mix: true })
+  const selected = ({ variant_strength, variant_hook, variant_body, variant_crop, variant_color,
+    variant_mirror, variant_blend_enabled, variant_blend_path, variant_blend_opacity, variant_blend_eof }) => ({
+    variant_strength, variant_hook, variant_body, variant_crop, variant_color, variant_mirror,
+    variant_blend_enabled, variant_blend_path, variant_blend_opacity, variant_blend_eof,
+  })
+  const choices = selected(useStore.getState().config)
+  useStore.getState().setConfig({ enable_variants: false })
+  assert.deepEqual(selected(useStore.getState().config), choices, 'turning off the master switch preserves every selected option')
+  useStore.getState().setConfig({ enable_variants: true })
+  assert.deepEqual(selected(useStore.getState().config), choices)
+  assert.equal(useStore.getState().config.variant_frame_mix, false)
+  assert.deepEqual(selected(JSON.parse(saved)), choices, 'all V2 settings are persisted')
+
+  ;({ useStore } = load('src/renderer/store.ts'))
+  assert.deepEqual(selected(useStore.getState().config), choices, 'saved V2 settings reload intact')
+  assert.equal(useStore.getState().config.variant_frame_mix, false)
+})
+
+test('dedup V2 request normalization clamps values and drops inactive B-video paths', () => {
+  global.localStorage = { getItem: () => null, setItem: () => {} }
+  const { useStore } = load('src/renderer/store.ts')
+  const { normalizeConfigForRequest } = load('src/renderer/api/client.ts')
+  const base = useStore.getState().config
+  const normalized = normalizeConfigForRequest({ ...base, enable_variants: true, variant_strength: 'strong',
+    variant_hook: false, variant_body: true, variant_crop: false, variant_color: true, variant_mirror: true,
+    variant_frame_mix: true, variant_blend_enabled: false, variant_blend_path: ' missing-invalid.mp4 ',
+    variant_blend_opacity: '0.08', variant_blend_eof: 'freeze' })
+  assert.equal(normalized.variant_strength, 'strong')
+  assert.equal(normalized.variant_hook, false)
+  assert.equal(normalized.variant_body, true)
+  assert.equal(normalized.variant_crop, false)
+  assert.equal(normalized.variant_color, true)
+  assert.equal(normalized.variant_mirror, true)
+  assert.equal(normalized.variant_frame_mix, false)
+  assert.equal(normalized.variant_blend_enabled, false)
+  assert.equal(normalized.variant_blend_path, '', 'an inactive stale path must not invalidate a request')
+  assert.equal(normalized.variant_blend_opacity, .08)
+  assert.equal(normalized.variant_blend_eof, 'freeze')
+
+  const enabled = normalizeConfigForRequest({ ...normalized, variant_blend_enabled: true,
+    variant_blend_path: ' C:\\video\\blend.mp4 ', variant_blend_opacity: 2 })
+  assert.equal(enabled.variant_blend_enabled, true)
+  assert.equal(enabled.variant_blend_path, 'C:\\video\\blend.mp4')
+  assert.equal(enabled.variant_blend_opacity, .15)
+  const inactive = normalizeConfigForRequest({ ...enabled, enable_variants: false })
+  assert.equal(inactive.variant_blend_enabled, false)
+  assert.equal(inactive.variant_blend_path, '')
 })

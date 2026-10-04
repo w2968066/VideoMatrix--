@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core.video_matrix import SharedMediaCache
+from app.core.output_settings import resolve_output_config
 from app.models.schemas import TaskStatus, VideoConfig
 from app.services import task_service as module
 
@@ -151,6 +152,30 @@ class BenchmarkSessionTests(unittest.TestCase):
         self.assertLess(result['results'][4]['completed_count'], 8)
         self.assertNotIn(4, result['verification_results'])
         self.assertEqual(result['best_concurrent'], 2)
+        self.assert_preserved_and_clean()
+
+    def test_random_output_settings_are_identical_across_concurrency_trials(self):
+        self.config.random_resolution_enabled = True
+        self.config.random_bitrate_enabled = True
+        output_manifests, output_seeds = {}, set()
+
+        def render(core, index, status):
+            config = resolve_output_config(core.config, core.task_name, index, core.config['_output_seed'])
+            with self.guard:
+                output_seeds.add(core.config['_output_seed'])
+                output_manifests.setdefault(status.task_name, []).append(
+                    (core.task_name, index, config['resolution'], config['bitrate']))
+            return self.render(core, index, status)
+
+        result = self.run_benchmark(render)
+        baseline = sorted(output_manifests['初测-1路'])
+        self.assertEqual(len(baseline), result['sample_count'])
+        self.assertEqual(len(output_seeds), 1)
+        self.assertGreater(len({item[2:] for item in baseline}), 1)
+        for label, manifest in output_manifests.items():
+            if label != '预热':
+                self.assertEqual(sorted(manifest), baseline, label)
+        self.assertEqual(set(result['verification_results']), {2, 4})
         self.assert_preserved_and_clean()
 
     def test_recovery_or_effective_limit_drop_is_unstable(self):

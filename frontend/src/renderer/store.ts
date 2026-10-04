@@ -63,6 +63,12 @@ const defaultConfig: VideoConfig = {
   resolution: '1080*1920',
   fps: '30',
   bitrate: '8000k',
+  random_resolution_enabled: false,
+  random_resolution_min: 1080,
+  random_resolution_max: 1440,
+  random_bitrate_enabled: false,
+  random_bitrate_min: 8000,
+  random_bitrate_max: 14000,
   vol_orig: 80,
   vol_hook_orig: 80,
   vol_bgm: 30,
@@ -80,9 +86,15 @@ const defaultConfig: VideoConfig = {
   variant_strength: 'balanced',
   variant_hook: true,
   variant_body: true,
+  variant_crop: true,
+  variant_color: false,
   variant_mirror: false,
-  variant_frame_mix: true,
+  variant_frame_mix: false,
   variant_seed: null,
+  variant_blend_enabled: false,
+  variant_blend_path: '',
+  variant_blend_opacity: 0.03,
+  variant_blend_eof: 'loop',
   enable_random_cover: false,
   random_cover_mode: 'replace',
 }
@@ -107,22 +119,38 @@ function loadSavedConfig(): VideoConfig {
       })),
       enable_random_cover: Boolean(saved.enable_random_cover),
       random_cover_mode: saved.random_cover_mode === 'insert' ? 'insert' : 'replace',
+      random_resolution_enabled: Boolean(saved.random_resolution_enabled),
+      random_resolution_min: saved.random_resolution_min ?? defaultConfig.random_resolution_min,
+      random_resolution_max: saved.random_resolution_max ?? defaultConfig.random_resolution_max,
+      random_bitrate_enabled: Boolean(saved.random_bitrate_enabled),
+      random_bitrate_min: saved.random_bitrate_min ?? defaultConfig.random_bitrate_min,
+      random_bitrate_max: saved.random_bitrate_max ?? defaultConfig.random_bitrate_max,
       vol_hook_orig: saved.vol_hook_orig ?? saved.vol_orig ?? defaultConfig.vol_hook_orig,
-      // V1 exposes a single final-output transformer, so legacy hidden scope/random
-      // options must not silently alter the new behavior.
-      variant_hook: true,
-      variant_body: true,
-      variant_mirror: false,
-      variant_frame_mix: true,
+      variant_strength: ['mild', 'balanced', 'strong'].includes(saved.variant_strength) ? saved.variant_strength : defaultConfig.variant_strength,
+      variant_hook: saved.variant_hook !== false,
+      variant_body: saved.variant_body !== false,
+      variant_crop: saved.variant_crop !== false,
+      variant_color: Boolean(saved.variant_color),
+      variant_mirror: Boolean(saved.variant_mirror),
+      // V2 no longer uses the legacy high-cost frame mixing option.
+      variant_frame_mix: false,
+      variant_blend_enabled: Boolean(saved.variant_blend_enabled),
+      variant_blend_path: typeof saved.variant_blend_path === 'string' ? saved.variant_blend_path : '',
+      variant_blend_opacity: normalizeVariantBlendOpacity(saved.variant_blend_opacity),
+      variant_blend_eof: ['loop', 'freeze', 'error'].includes(saved.variant_blend_eof) ? saved.variant_blend_eof : 'loop',
     }
-    if (!saved.bgm_tracks) {
-      localStorage.setItem('vm-config', JSON.stringify(config))
-      if (migration.notice) localStorage.setItem('vm-bgm-migration-notice', migration.notice)
-    }
+    localStorage.setItem('vm-config', JSON.stringify(config))
+    if (!saved.bgm_tracks && migration.notice) localStorage.setItem('vm-bgm-migration-notice', migration.notice)
     return config
   } catch {
     return { ...defaultConfig }
   }
+}
+
+function normalizeVariantBlendOpacity(value: unknown): number {
+  if (value == null || value === '') return 0.03
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.max(0.01, Math.min(0.15, parsed)) : 0.03
 }
 
 let toastId = 0
@@ -135,6 +163,8 @@ export const useStore = create<AppState>((set) => ({
   setConfig: (partial) =>
     set((state) => {
       const config = { ...state.config, ...partial }
+      // Keep the removed legacy frame-mixing switch disabled in saved state.
+      config.variant_frame_mix = false
       if (config.bgm_tracks) {
         // Keep legacy display/probing fields mirrored from the full track.
         // Never infer a music scope from the finished-Hook preset.

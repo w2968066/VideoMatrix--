@@ -296,7 +296,10 @@ def run_process(command, is_cancelled=None, on_process=None, timeout=None, cwd=N
     try:
         with tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(
-                command, stdout=subprocess.DEVNULL, stderr=errors, cwd=cwd,
+                # Electron's parent watcher blocks on its stdin pipe. Sharing
+                # that synchronous Windows handle can strand FFmpeg's keyboard
+                # polling after it has already written the requested frame.
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, cwd=cwd,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
             )
             if on_process:

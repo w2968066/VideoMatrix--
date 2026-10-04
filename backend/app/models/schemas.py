@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Dict, List, Optional, Literal, Union
 from datetime import datetime
 
@@ -48,6 +48,12 @@ class VideoConfig(BaseModel):
     resolution: str = Field(default="1080*1920", description="输出分辨率")
     fps: Union[str, float, int] = Field(default="30", description="输出帧率")
     bitrate: str = Field(default="8000k", description="视频码率")
+    random_resolution_enabled: bool = Field(default=False, description="主输出随机分辨率，保持当前宽高比")
+    random_resolution_min: int = Field(default=1080, description="随机分辨率短边下限(px)")
+    random_resolution_max: int = Field(default=1440, description="随机分辨率短边上限(px)")
+    random_bitrate_enabled: bool = Field(default=False, description="主输出随机视频目标码率")
+    random_bitrate_min: int = Field(default=8000, description="随机视频目标码率下限(kbps)")
+    random_bitrate_max: int = Field(default=14000, description="随机视频目标码率上限(kbps)")
     
     vol_orig: int = Field(default=80, ge=0, le=200, description="Body原声音量(%)")
     vol_hook_orig: Optional[int] = Field(default=None, ge=0, le=200, description="Hook原声音量(%)")
@@ -65,15 +71,45 @@ class VideoConfig(BaseModel):
     enable_gpu: bool = Field(default=True, description="自动选择可用硬件编码；不可用时继续使用CPU")
     concurrent_tasks: int = Field(default=3, ge=1, le=16, description="并发渲染数")
 
-    enable_variants: bool = Field(default=False, description="启用混剪后的成品变换层")
+    enable_variants: bool = Field(default=False, description="启用独立画面变换层，与混剪共用一次编码")
     variant_strength: Literal["mild", "balanced", "strong"] = Field(default="balanced", description="变体强度")
     variant_hook: bool = Field(default=True, description="变体作用于 Hook")
     variant_body: bool = Field(default=True, description="变体作用于 Body")
     variant_mirror: bool = Field(default=False, description="允许随机镜像")
-    variant_frame_mix: bool = Field(default=True, description="允许相邻帧低权重混合")
+    variant_crop: bool = Field(default=True, description="微裁切，按强度最多裁去每方向两侧合计 2%")
+    variant_color: bool = Field(default=False, description="显式启用轻微色彩调整")
+    variant_frame_mix: bool = Field(default=False, description="旧配置兼容字段，V2 不再执行帧混合")
+    variant_blend_enabled: bool = Field(default=False, description="显式启用 B 画面混合，会增加解码与滤镜耗时")
+    variant_blend_path: str = ""
+    variant_blend_opacity: float = Field(default=0.03, ge=0.01, le=0.15)
+    variant_blend_eof: Literal["loop", "freeze", "error"] = "loop"
+    variant_protected_regions: List[dict] = Field(default_factory=list, max_length=64, description="基础画面归一化保护区域，含 x/y/width/height 及可选 start/end")
     variant_seed: Optional[int] = Field(default=None, ge=0, description="任务级随机种子")
     enable_random_cover: bool = Field(default=False, description="随机替换成片首帧")
     random_cover_mode: Literal["replace", "insert"] = Field(default="replace", description="随机封面首帧处理方式")
+
+    @model_validator(mode='before')
+    @classmethod
+    def ignore_inactive_output_ranges(cls, values):
+        if isinstance(values, dict):
+            from ..core.output_settings import OUTPUT_DEFAULTS
+            values = values.copy()
+            for prefix in ('random_resolution', 'random_bitrate'):
+                flag = values.get(f'{prefix}_enabled', False)
+                inactive = flag is None or flag is False or flag == 0 or (
+                    isinstance(flag, str) and flag.lower() in ('false', 'f', '0', 'off', 'no', 'n')
+                )
+                if inactive:
+                    for suffix in ('min', 'max'):
+                        key = f'{prefix}_{suffix}'
+                        values[key] = OUTPUT_DEFAULTS[key]
+        return values
+
+    @model_validator(mode='after')
+    def check_output_ranges(self):
+        from ..core.output_settings import validate_output_settings
+        validate_output_settings(self.model_dump())
+        return self
 
 
 class BodyGroup(BaseModel):

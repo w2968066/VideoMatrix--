@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useStore } from '../store'
-import { api, TaskStatus, BgmScope, BgmTrack } from '../api/client'
+import { api, TaskStatus, BgmScope, BgmTrack, getRandomResolutionOptions, validateRandomOutputConfig } from '../api/client'
 import { Checkbox } from './ui/checkbox'
 import { Slider } from './ui/slider'
 import { SubtitlePreview } from './SubtitlePreview'
@@ -17,15 +17,15 @@ const RESOLUTION_PRESETS = [
 const VARIANT_STRENGTH_INFO = {
   mild: {
     label: '轻度',
-    description: '变化最小，优先保持原画面构图与观感，适合对画质和主体位置敏感的成品。',
+    description: '微裁切每个方向两侧合计最多 0.5%，尽量保留原构图。',
   },
   balanced: {
     label: '标准',
-    description: '变化幅度与原画观感较均衡，适合大多数日常混剪任务，推荐默认使用。',
+    description: '微裁切每个方向两侧合计最多 1%，适合日常使用。',
   },
   strong: {
     label: '增强',
-    description: '裁切、色彩和帧混合变化更明显，适合能够接受较强画面变化的成品。',
+    description: '微裁切每个方向两侧合计最多 2%，画面变化更明显。',
   },
 } as const
 
@@ -123,6 +123,42 @@ function EyeIcon({ open }: { open: boolean }) {
       <path d="M10.6 5.2A10.7 10.7 0 0 1 12 5c6.1 0 9.5 7 9.5 7a17.4 17.4 0 0 1-3.1 3.8M6.1 6.1C3.8 8 2.5 12 2.5 12s3.4 7 9.5 7c1.4 0 2.6-.3 3.7-.8M9.9 9.9A3 3 0 0 0 14.1 14" />
     </svg>
   )
+}
+
+function RandomOutputRange({ label, enabled, minimum, maximum, lowerBound, upperBound, unit, hint, onToggle, onMinimumChange, onMaximumChange }: {
+  label: '随机分辨率' | '随机码率'
+  enabled: boolean
+  minimum: string | number
+  maximum: string | number
+  lowerBound: number
+  upperBound: number
+  unit: string
+  hint: string
+  onToggle: (enabled: boolean) => void
+  onMinimumChange: (value: string) => void
+  onMaximumChange: (value: string) => void
+}) {
+  const prefix = label === '随机分辨率' ? `${label}短边` : label
+  return <div className="min-w-0 pl-2">
+    <div className="flex min-h-7 flex-wrap items-center gap-x-1.5 gap-y-1">
+      <label className="flex cursor-pointer items-center gap-1.5">
+        <Checkbox aria-label={label} checked={enabled} onCheckedChange={value => onToggle(value === true)} />
+        <span className="text-[11px] text-foreground/85">{label}</span>
+      </label>
+      <FeatureHelp topic={label} />
+      {enabled && <div className="flex min-w-0 items-center gap-1" aria-label={`${label}范围`}>
+        <input aria-label={`${prefix}下限`} type="number" inputMode="numeric" min={lowerBound} max={upperBound} step="1"
+          value={String(minimum ?? '')} onChange={event => onMinimumChange(event.target.value)}
+          className="h-6 w-[66px] min-w-0 rounded-[4px] border border-border/[0.10] bg-background-elev px-1.5 font-mono text-[10px] text-foreground outline-none focus:border-accent/70" />
+        <span className="text-[10px] text-muted-foreground">–</span>
+        <input aria-label={`${prefix}上限`} type="number" inputMode="numeric" min={lowerBound} max={upperBound} step="1"
+          value={String(maximum ?? '')} onChange={event => onMaximumChange(event.target.value)}
+          className="h-6 w-[66px] min-w-0 rounded-[4px] border border-border/[0.10] bg-background-elev px-1.5 font-mono text-[10px] text-foreground outline-none focus:border-accent/70" />
+        <span className="text-[9px] text-muted-foreground">{unit}</span>
+      </div>}
+    </div>
+    {enabled && <p className="mt-0.5 text-[9px] leading-3 text-muted-foreground">{hint}</p>}
+  </div>
 }
 
 function OverlapRateHelp() {
@@ -464,6 +500,9 @@ export default function SinglePage() {
   const running = tasks.filter(t => t.status === 'running').length
   const subtitleYPercent = Math.max(8, Math.min(92, Number(config.subtitle_y_percent) || 92))
   const subtitleFontSizePercent = Math.max(3, Math.min(9, Number(config.subtitle_font_size_percent) || 5.6))
+  const variantBlendOpacityPercent = Math.max(1, Math.min(15, (Number(config.variant_blend_opacity) || 0.03) * 100))
+  const randomResolutionOptions = config.random_resolution_enabled
+    ? getRandomResolutionOptions(config.resolution, config.random_resolution_min, config.random_resolution_max) : null
   const enabledBodyGroups = config.body_groups.filter((group) => group.enabled)
   const fullBody = config.body_mode === 'grouped' ? enabledBodyGroups.some(group => group.full_duration) : !!config.body_full_duration
   const allFullBody = config.body_mode === 'grouped' ? enabledBodyGroups.length > 0 && enabledBodyGroups.every(group => group.full_duration) : !!config.body_full_duration
@@ -511,8 +550,17 @@ export default function SinglePage() {
   }
   const isFilePath = (value: string) => /\.(mp3|wav|m4a|aac|flac|ogg|opus|mp4|mov|mkv|avi|webm)$/i.test(value.trim())
   const ensureRunConfig = () => {
+    const randomOutputError = validateRandomOutputConfig(config)
+    if (randomOutputError) {
+      addToast(randomOutputError, 'warning')
+      return null
+    }
     if (!config.hook_dir) {
       addToast('请填写 Hook', 'warning')
+      return null
+    }
+    if (config.enable_variants && config.variant_blend_enabled && !config.variant_blend_path.trim()) {
+      addToast('已开启 B 画面混合，请先选择 B 画面视频', 'warning')
       return null
     }
     const bodyDirs = config.body_dirs.length > 0 ? config.body_dirs : [config.hook_dir]
@@ -600,6 +648,17 @@ export default function SinglePage() {
       rememberBrowseDirectory(key, selectedPath, true)
       setConfig({ [key]: selectedPath } as any)
     }
+  }
+
+  const browseVariantBlend = async () => {
+    if (!window.electronAPI) { addToast('请在 Electron 中运行', 'warning'); return }
+    const selectedPath = await window.electronAPI.openFile(
+      [{ name: '视频', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'] }],
+      browseStartDirectory('variant_blend_path', config.variant_blend_path, true),
+    )
+    if (!selectedPath) return
+    rememberBrowseDirectory('variant_blend_path', selectedPath, true)
+    setConfig({ variant_blend_path: selectedPath, variant_blend_enabled: true })
   }
 
   const updateBgmTrack = (scope: BgmScope, patch: Partial<BgmTrack>) => {
@@ -1058,7 +1117,7 @@ export default function SinglePage() {
 
             {/* Output */}
             <Group title="输出" className="flex min-h-0 flex-1 flex-col">
-              <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-border/[0.055] bg-foreground/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+              <div role="region" aria-label="输出设置" className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1.5 items-center rounded-[6px] border border-border/[0.055] bg-foreground/[0.018] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
                 <div className="flex items-center gap-2 min-w-0">
                   <div className="flex-1 min-w-0">
                     <ParamRow label="分辨率" value={config.resolution} placeholder="1080*1920" onChange={(v) => setConfig({ resolution: v })} />
@@ -1082,7 +1141,21 @@ export default function SinglePage() {
                     ))}
                   </div>
                 </div>
-                <ParamRow label="码率" value={config.bitrate} placeholder="8000k" onChange={(v) => setConfig({ bitrate: v })} />
+                <ParamRow label="码率" value={config.bitrate} disabled={config.random_bitrate_enabled} placeholder="8000k" onChange={(v) => setConfig({ bitrate: v })} />
+                <RandomOutputRange label="随机分辨率" enabled={config.random_resolution_enabled}
+                  minimum={config.random_resolution_min} maximum={config.random_resolution_max} lowerBound={128} upperBound={7680} unit="短边 px"
+                  hint={randomResolutionOptions?.count
+                    ? Math.max(randomResolutionOptions.maxWidth, randomResolutionOptions.maxHeight) > 8192 || randomResolutionOptions.maxWidth * randomResolutionOptions.maxHeight > 8192 * 4320
+                      ? '范围上限超过 8K 尺寸预算，请降低短边上限或调整比例'
+                      : `比例依据 ${randomResolutionOptions.aspectRatio} · ${randomResolutionOptions.count} 种尺寸 · 每条抽一次，允许重复`
+                    : '范围内无合法偶数尺寸，请检查范围与比例依据'}
+                  onToggle={enabled => setConfig({ random_resolution_enabled: enabled })}
+                  onMinimumChange={value => setConfig({ random_resolution_min: value })} onMaximumChange={value => setConfig({ random_resolution_max: value })} />
+                <RandomOutputRange label="随机码率" enabled={config.random_bitrate_enabled}
+                  minimum={config.random_bitrate_min} maximum={config.random_bitrate_max} lowerBound={100} upperBound={200000} unit="kbps"
+                  hint="每条抽一次，允许重复；关闭恢复固定码率"
+                  onToggle={enabled => setConfig({ random_bitrate_enabled: enabled })}
+                  onMinimumChange={value => setConfig({ random_bitrate_min: value })} onMaximumChange={value => setConfig({ random_bitrate_max: value })} />
                 <ParamRow label="帧率" value={String(config.fps)} placeholder="29.97 / 30000/1001" onChange={(v) => setConfig({ fps: v as any })} />
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-2">
                   <label className="flex items-center gap-1.5 cursor-pointer">
@@ -1090,7 +1163,7 @@ export default function SinglePage() {
                     <span className="text-[11px] text-foreground/85">GPU</span>
                   </label>
                   <FeatureHelp topic="gpu" title="GPU 加速" />
-                  <label className="flex items-center gap-1.5 cursor-pointer" title="从成品随机抽帧并缩放裁切，可替换首帧或插入一帧；开启后会增加编码耗时。">
+                  <label className="flex items-center gap-1.5 cursor-pointer" title="从本条选中的素材片段随机抽帧裁切，与混剪一次编码；可替换首帧或插入一帧静音画面。">
                     <Checkbox checked={config.enable_random_cover} onCheckedChange={(v) => setConfig({ enable_random_cover: v as boolean })} />
                     <span className="text-[11px] text-foreground/85">随机首帧</span>
                     <span className="text-[9px] text-hot">建议打开</span>
@@ -1237,11 +1310,11 @@ export default function SinglePage() {
 
               {/* OUTPUT TRANSFORMER */}
               {rightTab === 'variant' && (
-                <div className="absolute inset-0 bg-background/70 px-5 py-5">
+                <div role="region" aria-label="成品去重变换设置" className="absolute inset-0 overflow-y-auto bg-background/70 px-5 py-5">
                   <div className="flex items-center justify-between border-b border-border/[0.06] pb-4">
                     <div>
                       <div className="text-[13px] font-semibold text-foreground">成品去重变换<FeatureHelp topic="variants" title="成品变换" /></div>
-                      <div className="mt-1 font-mono text-[10px] text-muted-foreground">OUTPUT TRANSFORMER V1</div>
+                      <div className="mt-1 font-mono text-[10px] text-muted-foreground">OUTPUT TRANSFORMER V2</div>
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <span className={`text-[11px] ${config.enable_variants ? 'text-accent' : 'text-muted-foreground'}`}>
@@ -1249,20 +1322,14 @@ export default function SinglePage() {
                       </span>
                       <Checkbox
                         checked={config.enable_variants}
-                        onCheckedChange={(v) => setConfig({
-                          enable_variants: v as boolean,
-                          variant_hook: true,
-                          variant_body: true,
-                          variant_mirror: false,
-                          variant_frame_mix: true,
-                        })}
+                        onCheckedChange={(v) => setConfig({ enable_variants: v as boolean })}
                       />
                     </label>
                   </div>
 
-                  <div className={`space-y-5 pt-5 transition-opacity ${config.enable_variants ? 'opacity-100' : 'pointer-events-none opacity-40'}`}>
-                    <div className="rounded-[5px] border border-border/[0.08] bg-foreground/[0.02] px-3 py-3 text-[11px] leading-5 text-foreground/80">
-                      混剪完成后自动处理最终成品。关闭时不增加任何处理步骤，也不会修改 Hook、Body 等源素材。
+                  <div className={`space-y-4 pt-4 pb-2 transition-opacity ${config.enable_variants ? 'opacity-100' : 'pointer-events-none opacity-40'}`}>
+                    <div className="rounded-[5px] border border-border/[0.08] bg-foreground/[0.02] px-3 py-2.5 text-[11px] leading-5 text-foreground/80">
+                      只变换输出画面，不修改源素材、音频或时长；与混剪共用一次编码。变换先于软件新增的字幕和水印。
                     </div>
 
                     <div>
@@ -1295,10 +1362,73 @@ export default function SinglePage() {
                           {VARIANT_STRENGTH_INFO[config.variant_strength].label}：
                         </span>
                         {VARIANT_STRENGTH_INFO[config.variant_strength].description}
+                        <p className="mt-1 text-[10px] text-muted-foreground">强度只控制微裁切；勾选色彩变化后，也按强度调整色彩幅度。B 画面混合透明度单独设置。</p>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-border/[0.06] pt-4 font-mono text-[10px]">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border/[0.06] pt-3">
+                      <span className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">作用范围</span>
+                      <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-foreground/85">
+                        <Checkbox checked={config.variant_hook} onCheckedChange={(value) => setConfig({ variant_hook: value === true })} />Hook
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-foreground/85">
+                        <Checkbox checked={config.variant_body} onCheckedChange={(value) => setConfig({ variant_body: value === true })} />Body
+                      </label>
+                      {config.enable_variants && !config.variant_hook && !config.variant_body && (
+                        <p className="w-full text-[10px] text-accent">未选择作用范围，本次不会产生画面变换。</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 border-t border-border/[0.06] pt-3">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">画面变化</div>
+                      <label className="flex cursor-pointer items-start gap-2 text-[11px] text-foreground/85">
+                        <Checkbox className="mt-0.5" checked={config.variant_crop} onCheckedChange={(value) => setConfig({ variant_crop: value === true })} />
+                        <span><span className="font-medium">微裁切</span><span className="ml-2 text-[10px] text-muted-foreground">每方向两侧合计上限：轻度 0.5% · 标准 1% · 增强 2%</span></span>
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2 text-[11px] text-foreground/85">
+                        <Checkbox checked={config.variant_color} onCheckedChange={(value) => setConfig({ variant_color: value === true })} />
+                        <span>轻微色彩变化<span className="ml-2 text-[10px] text-muted-foreground">仅勾选后启用，变化幅度随强度调整</span></span>
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2 text-[11px] text-foreground/85" title="随机镜像会翻转源画面已有的文字和 Logo。">
+                        <Checkbox checked={config.variant_mirror} onCheckedChange={(value) => setConfig({ variant_mirror: value === true })} />
+                        <span>允许随机镜像<span className="ml-2 text-[10px] text-amber-400">会翻转源画面文字 / Logo</span></span>
+                      </label>
+                    </div>
+
+                    <div className="space-y-2 border-t border-border/[0.06] pt-3">
+                      <label className="flex cursor-pointer items-center gap-2 text-[11px] text-foreground/85">
+                        <Checkbox checked={config.variant_blend_enabled} onCheckedChange={(value) => setConfig({ variant_blend_enabled: value === true })} />
+                        <span className="font-medium">B 画面混合</span>
+                        <span className="text-[10px] text-muted-foreground">可选；增加解码和滤镜耗时，只映射主片音轨</span>
+                      </label>
+                      <div className="flex min-w-0 items-center gap-2 pl-5">
+                        <input aria-label="B 画面视频路径" value={config.variant_blend_path} onChange={(event) => setConfig({ variant_blend_path: event.target.value })}
+                          placeholder="选择或粘贴视频路径" className="h-7 min-w-0 flex-1 rounded-[4px] border border-border/[0.10] bg-background-elev px-2 font-mono text-[10px] text-foreground outline-none placeholder:text-muted-foreground/55 focus:border-accent/70" />
+                        <button type="button" onClick={browseVariantBlend} className="h-7 shrink-0 rounded-[4px] border border-border/[0.08] px-2 text-[10px] text-foreground/85 hover:border-accent/50 hover:text-accent">选择视频</button>
+                        {config.variant_blend_path && <button type="button" onClick={() => setConfig({ variant_blend_path: '' })} className="h-7 shrink-0 rounded-[4px] border border-border/[0.08] px-2 text-[10px] text-muted-foreground hover:text-hot">清除</button>}
+                      </div>
+                      {config.variant_blend_enabled && (
+                        <>
+                          <div className="flex h-7 items-center gap-2 pl-5">
+                            <span className="shrink-0 text-[10px] text-muted-foreground">混合不透明度</span>
+                            <Slider ariaLabel="B 画面混合不透明度" value={[variantBlendOpacityPercent]} min={1} max={15} step={1}
+                              onValueChange={([value]) => setConfig({ variant_blend_opacity: value / 100 })} className="min-w-[90px] flex-1" />
+                            <span className="w-8 shrink-0 text-right font-mono text-[10px] text-accent">{variantBlendOpacityPercent.toFixed(0)}%</span>
+                          </div>
+                          <div className="flex items-center gap-2 pl-5">
+                            <span className="shrink-0 text-[10px] text-muted-foreground">B 画面结束时</span>
+                            <select aria-label="B 画面结束时的处理方式" value={config.variant_blend_eof} onChange={(event) => setConfig({ variant_blend_eof: event.target.value as 'loop' | 'freeze' | 'error' })}
+                              className="h-7 rounded-[4px] border border-border/[0.10] bg-background-elev px-2 text-[10px] text-foreground outline-none focus:border-accent/70">
+                              <option value="loop">循环补齐</option>
+                              <option value="freeze">定格末帧</option>
+                              <option value="error">跳过混合并提示</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-border/[0.06] pt-3 font-mono text-[10px]">
                       <div className="flex justify-between"><span className="text-muted-foreground">处理对象</span><span className="text-accent">最终成品</span></div>
                       <div className="flex justify-between"><span className="text-muted-foreground">源素材</span><span className="text-ok">不修改</span></div>
                       <div className="flex justify-between"><span className="text-muted-foreground">输出规格</span><span className="text-ok">保持</span></div>

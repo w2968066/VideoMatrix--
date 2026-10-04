@@ -10,9 +10,49 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from .ffmpeg import FFMPEG, FFPROBE
+from .ffmpeg import FFMPEG, FFPROBE, run_process
 from .video_variant import VideoVariantProcessor
 from .hardware import session_for
+
+
+def prepare_cover_frame(clips, config, seed, directory, is_cancelled=None, on_process=None):
+    """Decode only a selected source frame, before starting the main encode."""
+    mode = str(config.get('random_cover_mode', 'replace'))
+    if mode not in ('replace', 'insert'):
+        raise ValueError('随机封面模式无效')
+    fps_text = str(config['fps'])
+    numerator, _, denominator = fps_text.partition('/')
+    fps = float(numerator) / float(denominator or 1)
+    width, height = map(int, config['resolution'].lower().replace('*', 'x').split('x'))
+    rng = random.Random(seed)
+    sample_time = rng.random() * sum(float(clip['duration']) for clip in clips)
+    remaining = sample_time
+    selected = clips[-1]
+    for clip in clips:
+        selected = clip
+        if remaining < clip['duration']:
+            break
+        remaining -= clip['duration']
+    # Leave one output frame before the selected cut's end; no finished-video
+    # probe/count pass and no shared decoder waiting for a distant frame.
+    source_time = float(selected['start']) + min(remaining, max(0., selected['duration'] - 1 / fps))
+    zoom = rng.uniform(1.02, 1.18)
+    scaled_w = max(width, int(width * zoom) // 2 * 2)
+    scaled_h = max(height, int(height * zoom) // 2 * 2)
+    crop_x, crop_y = rng.uniform(0, scaled_w - width), rng.uniform(0, scaled_h - height)
+    path = os.path.join(directory, 'cover.png')
+    command = [
+        FFMPEG, '-nostdin', '-v', 'error', '-y', '-ss', f'{source_time:.9f}',
+        '-threads', '2', '-i', selected['file'], '-an',
+        '-vf', f'scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase,'
+        f'crop={scaled_w}:{scaled_h},crop={width}:{height}:{crop_x:.3f}:{crop_y:.3f},setsar=1',
+        '-frames:v', '1', '-threads', '1', '-compression_level', '1', '-update', '1', path,
+    ]
+    ok, error = run_process(command, is_cancelled, on_process, timeout=30)
+    if not ok or not os.path.isfile(path) or not os.path.getsize(path):
+        raise RuntimeError(error or '随机封面没有可用画面')
+    return path, {'sample_time': sample_time, 'source_time': source_time,
+                  'source': selected['file'], 'zoom': zoom, 'seed': seed, 'mode': mode}
 
 
 class RandomCoverProcessor:

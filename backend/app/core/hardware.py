@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ffmpeg import FFMPEG, run_process
+from .output_settings import output_probe_config
 
 
 ENCODERS = {
@@ -266,13 +267,16 @@ def _signature(config: dict, executable: str) -> str:
         devices = _capture(["system_profiler", "SPDisplaysDataType", "-json"], 5)
     else:
         devices = platform.platform()
-    payload = (4, stamp, platform.platform(), devices, config.get("resolution"),
+    payload = (5, stamp, platform.platform(), devices, config.get("resolution"),
                str(config.get("fps")), config.get("bitrate"))
     return hashlib.sha256(repr(payload).encode()).hexdigest()
 
 
 def probe_encoders(config: dict, state_dir: str | None = None, cancelled=None) -> dict:
     """Persist short probes for 24h; invalidate on driver/OS/binary/settings change."""
+    # Check the full random-output budget, including when a caller already has
+    # sampled this output. Use the same copied settings for cache and encode.
+    config = output_probe_config(config)
     while not _probe_lock.acquire(timeout=0.1):
         if cancelled and cancelled():
             return {"available": [], "failures": {}, "cancelled": True}

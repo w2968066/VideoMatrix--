@@ -9,6 +9,7 @@ import concurrent.futures
 import time
 import uuid
 import re
+import shutil
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Callable
 
@@ -18,6 +19,7 @@ from .ffmpeg import (
 )
 from .timeline import apply_timeline_totals, body_segment_specs
 from .bgm_tracks import configured_tracks, prepare_track, track_filter, TRACK_LABELS
+from .output_settings import resolve_output_config, validate_output_settings, parse_resolution
 
 MEDIA_CACHE_VERSION = 2
 DURATION_EPSILON = 0.001
@@ -130,6 +132,9 @@ class VideoMatrixCore:
     def __init__(self, config: dict, log_callback: Callable, shared_cache: SharedMediaCache):
         self.config = config
         self.rng = random.Random(config['_selection_seed']) if '_selection_seed' in config else random
+        self._output_seed = config.get('_output_seed')
+        if self._output_seed is None and (config.get('random_resolution_enabled') or config.get('random_bitrate_enabled')):
+            self._output_seed = random.SystemRandom().randrange(0, 2**63)
         self.log = log_callback
         self.shared = shared_cache
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -152,6 +157,42 @@ class VideoMatrixCore:
         self.current_process = None
         self.processes = set()
         self.core_lock = threading.Lock()
+        self._variant_probe_lock = threading.Lock()
+        self._variant_probe_cache = {}
+
+    def _probe_variant_input(self, path: str) -> dict:
+        """Only optional B inputs need an extra probe; share it across outputs."""
+        from .video_variant import VideoVariantProcessor
+        stat = os.stat(path)
+        key = (os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
+        # Do not hold core_lock: the probe's process callback uses that lock.
+        while not self._variant_probe_lock.acquire(timeout=.1):
+            if not self.is_running:
+                raise InterruptedError('已停止')
+        try:
+            if not self.is_running:
+                raise InterruptedError('已停止')
+            if key not in self._variant_probe_cache:
+                if len(self._variant_probe_cache) >= 8:
+                    self._variant_probe_cache.clear()
+                try:
+                    info = VideoVariantProcessor._probe_media(
+                        path, lambda: not self.is_running, self._track_process)
+                    self._variant_probe_cache[key] = (info, None)
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    if not self.is_running:
+                        raise InterruptedError('已停止') from exc
+                    # A corrupt/slow B asset must not be re-probed for every
+                    # output in a batch. A changed file gets a new cache key.
+                    self._variant_probe_cache[key] = (None, str(exc))
+            info, error = self._variant_probe_cache[key]
+            if error:
+                raise ValueError(error)
+            return info
+        finally:
+            self._variant_probe_lock.release()
 
     def _scan_files(self, dir_path: str, exts: tuple) -> List[str]:
         if not dir_path or not os.path.exists(dir_path):
@@ -258,6 +299,10 @@ class VideoMatrixCore:
         self.voice_pool.clear()
 
         cfg = self.config
+        try:
+            validate_output_settings(cfg)
+        except ValueError as exc:
+            return False, f'输出参数无效：{exc}'
         tracks = configured_tracks(cfg)
         if tracks:
             full = tracks.get('full', {})
@@ -487,6 +532,37 @@ class VideoMatrixCore:
         return True, "预检通过"
 
     def render_single_video(self, task_idx: int, return_result: bool = False):
+        workspace = {}
+        try:
+            return self._render_single_video(task_idx, return_result, workspace)
+        finally:
+            # Only our frame scratch directory lives in temp. The encoder writes
+            # its exclusively reserved final filename directly: no rename/copy
+            # after completion for Explorer/scanners to block on Windows.
+            if workspace.get('path'):
+                shutil.rmtree(workspace['path'], ignore_errors=True)
+            if workspace.get('output') and not workspace.get('completed'):
+                try:
+                    os.unlink(workspace['output'])
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    self.log(f"未完成文件无法清理，请勿使用：{workspace['output']}（{exc}）")
+
+    @staticmethod
+    def _reserve_output(directory, stem):
+        """Claim a unique name before encoding; never overwrite another output."""
+        for _ in range(10):
+            destination = os.path.abspath(os.path.join(directory, f'{stem}_{uuid.uuid4().hex[:8]}.mp4'))
+            try:
+                descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            except FileExistsError:
+                continue
+            os.close(descriptor)
+            return destination
+        raise FileExistsError('无法分配唯一输出文件名')
+
+    def _render_single_video(self, task_idx: int, return_result: bool, workspace):
         if not self.is_running:
             return (False, None, None) if return_result else False
 
@@ -494,7 +570,17 @@ class VideoMatrixCore:
         self.log(f"  [{now_str_start}] [{self.task_name}] 正在拼装 视频 {task_idx:03d} ...")
 
         start_time = time.time()
-        cfg = dict(self.config)
+        try:
+            cfg = resolve_output_config(self.config, self.task_name, task_idx, self._output_seed or 0)
+        except ValueError as exc:
+            self.log(f'    [{self.task_name}] 输出参数无效：{exc}')
+            return (False, None, None) if return_result else False
+        if cfg.get('_output_settings'):
+            active = ' / '.join(name for name, enabled in (
+                ('随机分辨率', cfg.get('random_resolution_enabled')),
+                ('随机码率', cfg.get('random_bitrate_enabled')),
+            ) if enabled)
+            self.log(f"[{self.task_name}] [输出参数] 视频 {task_idx:03d}：{cfg['resolution']} · {cfg['bitrate']}（{active}）。")
         body_specs = body_segment_specs(cfg)
 
         with self.core_lock:
@@ -610,6 +696,20 @@ class VideoMatrixCore:
             inputs.append(cfg['watermark_path'])
             watermark_idx = len(inputs) - 1
 
+        # Never let an audio request decode a later clip's video ahead of concat.
+        # With long Hooks + 4K/60fps Body, shared A/V inputs can queue gigabytes
+        # of decoded Body frames. Audio-only readers keep video demand-driven,
+        # without another video decode/encode. Append to preserve music/WM indices.
+        original_audio_inputs = {}
+        audio_clip_indices = {}
+        if has_original_audio:
+            for clip_index, clip in enumerate(clips):
+                if clip.get('has_audio', False):
+                    audio_index = len(inputs)
+                    original_audio_inputs[clip_index] = audio_index
+                    audio_clip_indices[audio_index] = clip_index
+                    inputs.append(clip['file'])
+
         # Accurate input seeking skips long unused prefixes. Keep one second of
         # preroll, then trim residual timestamps for frame/audio boundary accuracy.
         seek_offsets = [max(0.0, float(c['start']) - 1.0) for c in clips]
@@ -628,27 +728,101 @@ class VideoMatrixCore:
                 offset = seek_offsets[idx] if idx < len(clips) else bgm_seek if idx == len(clips) else 0.0
                 if idx in music_inputs:
                     offset = music_inputs[idx]['seek']
+                if idx in audio_clip_indices:
+                    offset = seek_offsets[audio_clip_indices[idx]]
                 if offset > 0:
                     cmd.extend(['-ss', f'{offset:.9f}'])
+                if idx < len(clips):
+                    cmd.append('-an')
+                elif idx in audio_clip_indices:
+                    cmd.append('-vn')
                 cmd.extend(['-threads', '2', '-i', inp])
 
         n_clips = len(clips)
         res_str = cfg['resolution'].lower().replace('*', 'x')
         w, h = map(int, res_str.split('x'))
-        
+
+        cover_path, cover_summary = None, None
+        cfg.pop('_cover_applied', None)
+        cfg.pop('_output_warnings', None)
+        if cfg.get('enable_random_cover'):
+            workspace['path'] = tempfile.mkdtemp(prefix='cover-', dir=self.temp_dir_path)
+            from .video_cover import prepare_cover_frame
+            from .video_variant import derive_variant_seed
+            cover_seed = derive_variant_seed(int(cfg.get('_cover_seed') or 0), self.task_name + ':cover', task_idx)
+            # Mark attempts, including failures, so TaskService cannot restart a
+            # costly full-video postprocess after the main encode has finished.
+            cfg['_cover_applied'] = {'seed': cover_seed, 'skipped': True}
+            try:
+                cover_path, cover_summary = prepare_cover_frame(
+                    clips, cfg, cover_seed, workspace['path'],
+                    lambda: not self.is_running, self._track_process)
+                cfg['_cover_applied'] = cover_summary
+            except Exception as exc:
+                if not self.is_running:
+                    return (False, None, None) if return_result else False
+                message = f'随机封面取帧未完成，本条将使用基础混剪：{exc}'
+                cfg.setdefault('_output_warnings', []).append(message)
+                self.log(f'    [{self.task_name}] {message}')
+
+        # The independent layer supplies normalization recipes, not a second
+        # full-video encode. It never changes source selection or audio filters.
+        baseline_inputs = list(cmd)
+        variant_segments = {}
+        blend = None
+        recipe = None
+        cfg.pop('_variant_applied', None)
+        cfg.pop('_variant_warnings', None)
+        if cfg.get('enable_variants') and cfg.get('_fuse_variants', True):
+            from .dedup_plan import build_recipe, normalize_filter, summary, VERSION
+            from .dedup_blend import prepare_blend
+            from .video_variant import derive_variant_seed
+            seed = derive_variant_seed(int(cfg.get('variant_seed') or 0), self.task_name, task_idx)
+            cfg['_variant_applied'] = {'version': VERSION, 'seed': seed, 'skipped': True}
+            try:
+                recipe = build_recipe(cfg, seed)
+                variant_segments = {part.index: normalize_filter(recipe, part) for part in recipe.segments}
+                cfg['_variant_applied'] = summary(recipe)
+                for message in recipe.warnings:
+                    self.log(f'    [{self.task_name}] 变换保护：{message}')
+                try:
+                    blend = prepare_blend(cfg, self._probe_variant_input)
+                except Exception as exc:
+                    if not self.is_running:
+                        return (False, None, None) if return_result else False
+                    cfg.setdefault('_variant_warnings', []).append(f'B 画面混合未完成：{exc}')
+                if blend:
+                    cmd.extend(blend.input_args())
+                    cfg['_variant_applied']['blend'] = {
+                        'opacity': blend.opacity, 'eof': blend.eof,
+                    }
+            except Exception as exc:
+                if not self.is_running:
+                    return (False, None, None) if return_result else False
+                variant_segments = {}
+                cfg.setdefault('_variant_warnings', []).append(f'变换配方无效，已跳过：{exc}')
+            for message in cfg.get('_variant_warnings', []):
+                self.log(f'    [{self.task_name}] {message}')
+
+        normalization_replacements = []
         filter_complex = ""
         for i, clip in enumerate(clips):
             start, dur, clip_has_audio = clip['start'] - seek_offsets[i], clip['duration'], clip.get('has_audio', False)
-            filter_complex += (
+            base_normalization = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,format=yuv420p"
+            prefix = (
                 f"[{i}:v]trim=start={start}:duration={dur},setpts=PTS-STARTPTS,"
-                f"fps={fps_val},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
-                f"setsar=1,format=yuv420p[v{i}]; "
+                f"fps={fps_val},"
             )
+            original = f"{prefix}{base_normalization}[v{i}]; "
+            transformed = f"{prefix}{variant_segments.get(i, base_normalization)}[v{i}]; "
+            filter_complex += transformed
+            if transformed != original:
+                normalization_replacements.append((transformed, original))
             if has_original_audio:
                 clip_volume = vol_hook_orig if i == 0 else vol_orig
                 if clip_has_audio:
                     filter_complex += (
-                        f"[{i}:a]atrim=start={start}:duration={dur},asetpts=PTS-STARTPTS,"
+                        f"[{original_audio_inputs[i]}:a]atrim=start={start}:duration={dur},asetpts=PTS-STARTPTS,"
                         f"aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
                         f"apad=pad_dur={dur},atrim=duration={dur},volume={clip_volume}[a{i}]; "
                     )
@@ -666,6 +840,11 @@ class VideoMatrixCore:
             filter_complex += f"{concat_inputs}concat=n={n_clips}:v=1:a=0[vout_base]; "
 
         current_v = "[vout_base]"
+        blend_graph = ''
+        if blend:
+            blend_graph, current_v = blend.filters(len(inputs), current_v)
+            blend_graph += '; '
+            filter_complex += blend_graph
         if temp_srt_path_safe:
             subtitle_filter = build_subtitle_filter(
                 temp_srt_path_safe,
@@ -678,10 +857,24 @@ class VideoMatrixCore:
         if has_watermark:
             watermark_offset = 0.0 if cfg.get('apply_watermark_to_hook', True) else t_hook
             watermark_input = f"[{watermark_idx}:v]"
+            reference = cfg.get('_output_settings', {}).get('reference_resolution')
+            if reference:
+                reference_w, reference_h = parse_resolution(reference)
+                ratio = w / reference_w
+                # Keep the watermark's relative footprint when ONLY the output
+                # dimensions change. Clip what was already outside the centered
+                # reference canvas BEFORE scaling, bounding intermediate memory.
+                # Fixed-output behavior remains untouched.
+                filter_complex += (
+                    f"{watermark_input}crop=w='min(iw,{reference_w})':h='min(ih,{reference_h})':exact=1,"
+                    f"scale=w='max(2,round(iw*{ratio:.12f}/2)*2)':"
+                    f"h='max(2,round(ih*{ratio:.12f}/2)*2)'[wm_scaled]; "
+                )
+                watermark_input = '[wm_scaled]'
             enable_filter = ""
             if watermark_offset > 0:
                 filter_complex += (
-                    f"[{watermark_idx}:v]setpts=PTS-STARTPTS+{watermark_offset}/TB[wm_timed]; "
+                    f"{watermark_input}setpts=PTS-STARTPTS+{watermark_offset}/TB[wm_timed]; "
                 )
                 watermark_input = "[wm_timed]"
                 enable_filter = f":enable='gte(t,{watermark_offset})'"
@@ -775,26 +968,101 @@ class VideoMatrixCore:
             audio_map = "[aout_final]"
 
         filter_complex = filter_complex.strip('; ')
-        if cfg.get('enable_variants') and cfg.get('_fuse_variants', True):
-            from .video_variant import VideoVariantProcessor, derive_variant_seed
-            seed = derive_variant_seed(int(cfg.get('variant_seed') or 0), self.task_name, task_idx)
-            extra, current_v, audio_map, summary = VideoVariantProcessor.inline_filters(cfg, seed, current_v, audio_map)
-            if extra:
-                filter_complex += '; ' + extra
-            cfg['_variant_applied'] = summary
-        out_name = f"{self.task_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{task_idx:03d}.mp4"
-        out_path = os.path.join(cfg['out_dir'], out_name)
+        out_stem = f"{self.task_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{task_idx:03d}"
+        out_path = self._reserve_output(cfg['out_dir'], out_stem)
+        workspace['output'] = out_path
 
-        cmd.extend(['-filter_complex', filter_complex, '-map', current_v])
+        base_graph, base_v, base_audio = filter_complex, current_v, audio_map
+        frame_duration = 0.
+        cover_input_args = []
+        if cover_path:
+            from fractions import Fraction
+            frame_duration = 1 / float(Fraction(fps_val)) if cover_summary['mode'] == 'insert' else 0.
+            cover_index = len(inputs) + (1 if blend else 0)
+            cover_input_args = ['-framerate', fps_val, '-i', cover_path]
+            cmd.extend(cover_input_args)
+            # The image input contains one frame, so overlay never buffers a
+            # later main-video frame. tpad adds exactly one frame for insert.
+            pad = ',tpad=start_mode=clone:start=1' if frame_duration else ''
+            filter_complex += (
+                f';{current_v}fps={fps_val}{pad}[cover_base];'
+                f'[{cover_index}:v]setpts=PTS-STARTPTS,setsar=1[cover_frame];'
+                '[cover_base][cover_frame]overlay=0:0:eof_action=pass:repeatlast=0:shortest=0[v_cover]'
+            )
+            current_v = '[v_cover]'
+            if audio_map and frame_duration:
+                # The main mix is 44100 Hz. Sample-based delay keeps rational
+                # frame rates accurate and prepends silence without another mux.
+                samples = round(frame_duration * 44100)
+                filter_complex += f';{audio_map}adelay={samples}S:all=1[a_cover]'
+                audio_map = '[a_cover]'
+
+        output_args = []
         if audio_map:
-            cmd.extend(['-map', audio_map, '-c:a', 'aac'])
-        cmd.extend(['-r', fps_val, '-b:v', cfg['bitrate'], '-t', f"{t_total:.3f}"])
+            output_args.extend(['-map', audio_map, '-c:a', 'aac'])
+        output_args.extend(['-r', fps_val, '-b:v', cfg['bitrate'], '-t',
+                            f'{t_total + frame_duration:.12f}' if frame_duration else f'{t_total:.3f}'])
+        cmd.extend(['-filter_complex', filter_complex, '-map', current_v, *output_args])
+
+        if cfg.get('_output_settings'):
+            # Also share one session when the core is used without TaskService.
+            # Probes use the configured upper budget, not each sampled output.
+            from .hardware import session_for
+            cfg['_hardware_session'] = session_for(self.config, self.log)
 
         success, error = render_video(
             cmd, cfg.get('enable_gpu', True), out_path, self.temp_dir_path,
             config=cfg, log=self.log, is_cancelled=lambda: not self.is_running,
             on_process=self._track_process,
         )
+        if not success and self.is_running and (normalization_replacements or blend):
+            # One retry with the SAME selected clips, timeline, music, subtitles,
+            # and output path. Never re-enter render_single_video/re-randomize.
+            from .hardware import short_error
+            message = f'去重变换失败，已回退基础混剪：{short_error(error)}'
+            self.log(f'    [{self.task_name}] {message}')
+            cfg.setdefault('_variant_warnings', []).append(message)
+            cfg['_variant_applied'] = {'version': VERSION, 'seed': seed, 'skipped': True}
+            baseline_graph = filter_complex
+            for transformed, original in normalization_replacements:
+                baseline_graph = baseline_graph.replace(transformed.rstrip('; '), original.rstrip('; '), 1)
+            if blend_graph:
+                baseline_graph = baseline_graph.replace(blend_graph.rstrip('; '), '', 1)
+                baseline_graph = baseline_graph.replace('[dedup_blended]', '[vout_base]')
+                if cover_path:
+                    baseline_graph = baseline_graph.replace(f'[{cover_index}:v]', f'[{len(inputs)}:v]')
+                baseline_graph = re.sub(r';\s*;', ';', baseline_graph).strip('; ')
+            baseline_v = current_v.replace('[dedup_blended]', '[vout_base]')
+            baseline_cmd = baseline_inputs + cover_input_args + ['-filter_complex', baseline_graph, '-map', baseline_v, *output_args]
+            success, error = render_video(
+                baseline_cmd, cfg.get('enable_gpu', True), out_path, self.temp_dir_path,
+                config=cfg, log=self.log, is_cancelled=lambda: not self.is_running,
+                on_process=self._track_process,
+            )
+        if not success and self.is_running and cover_path:
+            from .hardware import short_error
+            message = f'随机封面编码未完成，已回退基础混剪：{short_error(error)}'
+            cfg.setdefault('_output_warnings', []).append(message)
+            cfg['_cover_applied'] = {'seed': cover_summary['seed'], 'skipped': True}
+            self.log(f'    [{self.task_name}] {message}')
+            if normalization_replacements or blend:
+                # The preceding variant fallback already removed dedup filters.
+                for transformed, original in normalization_replacements:
+                    base_graph = base_graph.replace(transformed.rstrip('; '), original.rstrip('; '), 1)
+                if blend_graph:
+                    base_graph = base_graph.replace(blend_graph.rstrip('; '), '', 1).replace('[dedup_blended]', '[vout_base]')
+                    base_v = base_v.replace('[dedup_blended]', '[vout_base]')
+                    base_graph = re.sub(r';\s*;', ';', base_graph).strip('; ')
+            plain_args = []
+            if base_audio:
+                plain_args.extend(['-map', base_audio, '-c:a', 'aac'])
+            plain_args.extend(['-r', fps_val, '-b:v', cfg['bitrate'], '-t', f'{t_total:.3f}'])
+            success, error = render_video(
+                baseline_inputs + ['-filter_complex', base_graph, '-map', base_v, *plain_args],
+                cfg.get('enable_gpu', True), out_path, self.temp_dir_path,
+                config=cfg, log=self.log, is_cancelled=lambda: not self.is_running,
+                on_process=self._track_process,
+            )
         if not success and self.is_running:
             from .hardware import short_error
             self.log(f"    [{self.task_name}] 视频 {task_idx:03d} 失败：{short_error(error)}")
@@ -804,6 +1072,9 @@ class VideoMatrixCore:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 输出异常（文件过小或不存在），可能编码失败")
                 return (False, None, None) if return_result else False
+            workspace['completed'] = True
+            if cover_path and not cfg['_cover_applied'].get('skipped'):
+                self.log(f"    [{self.task_name}] 随机封面已合并主编码（{cover_summary['mode']}）：取样约 {cover_summary['sample_time']:.3f} 秒")
             if 'id' in hook_clip:
                 with self.shared.lock:
                     self.shared.usage_history.add(hook_clip['id'])
@@ -812,7 +1083,7 @@ class VideoMatrixCore:
             self.last_output_path = out_path
             self.last_elapsed = round(elapsed_time, 1)
             now_str = datetime.now().strftime("%H:%M:%S")
-            self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 基础混剪完成，耗时 {elapsed_time:.1f} 秒 -> {out_name}")
+            self.log(f"    [{now_str}] [{self.task_name}] 视频 {task_idx:03d} 混剪完成，耗时 {elapsed_time:.1f} 秒 -> {os.path.basename(out_path)}")
             return (True, out_path, self.last_elapsed) if return_result else True
         return (False, None, None) if return_result else False
 

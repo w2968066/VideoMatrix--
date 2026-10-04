@@ -11,6 +11,8 @@ function formatApiError(detail: unknown, fallback: string): string {
     hook_r: 'Hook 重叠率', body_r: 'Body 重叠率', bgm_r: 'BGM 重叠率',
     t_hook: '首段时长', t_body: '后段时长', total_clips: '片段数',
     target_count: '生成数量', concurrent_tasks: '并发数', vol_hook_orig: 'Hook 原声音量',
+    random_resolution_min: '随机分辨率短边下限', random_resolution_max: '随机分辨率短边上限',
+    random_bitrate_min: '随机码率下限', random_bitrate_max: '随机码率上限',
     full: '全片 BGM', hook: 'Hook BGM', body: 'Body BGM',
     volume: '音量', fade_in: '渐入秒数', fade_out: '渐出秒数', overlap: '裁切重叠率', path: '配乐路径',
   }
@@ -91,6 +93,12 @@ export interface VideoConfig {
   resolution: string
   fps: string | number
   bitrate: string
+  random_resolution_enabled: boolean
+  random_resolution_min: string | number
+  random_resolution_max: string | number
+  random_bitrate_enabled: boolean
+  random_bitrate_min: string | number
+  random_bitrate_max: string | number
   vol_orig: string | number
   vol_hook_orig: string | number
   vol_bgm: string | number
@@ -108,9 +116,15 @@ export interface VideoConfig {
   variant_strength: 'mild' | 'balanced' | 'strong'
   variant_hook: boolean
   variant_body: boolean
+  variant_crop: boolean
+  variant_color: boolean
   variant_mirror: boolean
   variant_frame_mix: boolean
   variant_seed?: number | null
+  variant_blend_enabled: boolean
+  variant_blend_path: string
+  variant_blend_opacity: string | number
+  variant_blend_eof: 'loop' | 'freeze' | 'error'
   enable_random_cover: boolean
   random_cover_mode: 'replace' | 'insert'
 }
@@ -128,11 +142,61 @@ function numberIfValid(value: unknown) {
   return Number.isFinite(parsed) ? parsed : value
 }
 
+export function getRandomResolutionOptions(resolution: string, minimum: string | number, maximum: string | number) {
+  const match = String(resolution).trim().match(/^(\d+)\s*[*xX×]\s*(\d+)$/)
+  if (!match) return null
+  const width = Number(match[1]), height = Number(match[2])
+  const min = Number(minimum), max = Number(maximum)
+  if (![width, height].every(value => Number.isSafeInteger(value) && value > 0)
+    || ![min, max].every(value => Number.isInteger(value) && value >= 128 && value <= 7680) || min > max) return null
+  let a = width, b = height
+  while (b) { const remainder = a % b; a = b; b = remainder }
+  const widthRatio = width / a, heightRatio = height / a
+  // A reduced ratio always has an odd side; an even multiplier makes both dimensions even.
+  const step = 2 * Math.min(widthRatio, heightRatio)
+  const first = Math.ceil(min / step) * step, last = Math.floor(max / step) * step
+  const maxMultiplier = last / Math.min(widthRatio, heightRatio)
+  return { step, first, last, count: Math.max(0, Math.floor((last - first) / step) + 1), aspectRatio: `${widthRatio}:${heightRatio}`,
+    maxWidth: widthRatio * maxMultiplier, maxHeight: heightRatio * maxMultiplier }
+}
+
+export function validateRandomOutputConfig(config: VideoConfig): string | null {
+  if (config.random_resolution_enabled) {
+    const min = Number(config.random_resolution_min), max = Number(config.random_resolution_max)
+    if (![min, max].every(value => Number.isInteger(value) && value >= 128 && value <= 7680)) {
+      return '随机分辨率：短边范围须为 128–7680 的整数（px）'
+    }
+    if (min > max) return '随机分辨率：短边下限不能大于上限'
+    const options = getRandomResolutionOptions(config.resolution, min, max)
+    if (!options) return '随机分辨率：请填写有效的比例依据分辨率，例如 1080*1920'
+    if (!options.count) return '随机分辨率：范围内没有保持当前宽高比且宽高均为偶数的尺寸，请扩大范围'
+    if (Math.max(options.maxWidth, options.maxHeight) > 8192 || options.maxWidth * options.maxHeight > 8192 * 4320) {
+      return '随机分辨率范围上限超过尺寸预算（长边≤8192，总像素≤35389440），请降低短边上限或调整比例。'
+    }
+  }
+  if (config.random_bitrate_enabled) {
+    const min = Number(config.random_bitrate_min), max = Number(config.random_bitrate_max)
+    if (![min, max].every(value => Number.isInteger(value) && value >= 100 && value <= 200000)) {
+      return '随机码率：范围须为 100–200000 的整数（kbps）'
+    }
+    if (min > max) return '随机码率：下限不能大于上限'
+  }
+  return null
+}
+
 export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
   const normalized = { ...config } as VideoConfig
   NUMERIC_CONFIG_FIELDS.forEach((key) => {
     ;(normalized as any)[key] = numberIfValid(config[key])
   })
+  normalized.random_resolution_enabled = Boolean(config.random_resolution_enabled)
+  normalized.random_resolution_min = normalized.random_resolution_enabled ? numberIfValid(config.random_resolution_min ?? 1080) as string | number : 1080
+  normalized.random_resolution_max = normalized.random_resolution_enabled ? numberIfValid(config.random_resolution_max ?? 1440) as string | number : 1440
+  normalized.random_bitrate_enabled = Boolean(config.random_bitrate_enabled)
+  normalized.random_bitrate_min = normalized.random_bitrate_enabled ? numberIfValid(config.random_bitrate_min ?? 8000) as string | number : 8000
+  normalized.random_bitrate_max = normalized.random_bitrate_enabled ? numberIfValid(config.random_bitrate_max ?? 14000) as string | number : 14000
+  const randomOutputError = validateRandomOutputConfig(normalized)
+  if (randomOutputError) throw new Error(randomOutputError)
   normalized.body_mode = config.body_mode === 'grouped' ? 'grouped' : 'normal'
   const normalizedGroups = (config.body_groups || []).slice(0, 4).map((group) => {
     const safeGroup = group || {} as BodyGroup
@@ -165,6 +229,22 @@ export function normalizeConfigForRequest(config: VideoConfig): VideoConfig {
     normalized.hook_r = 1
   }
   normalized.random_cover_mode = config.random_cover_mode === 'insert' ? 'insert' : 'replace'
+  normalized.variant_strength = ['mild', 'balanced', 'strong'].includes(config.variant_strength) ? config.variant_strength : 'balanced'
+  normalized.variant_hook = Boolean(config.variant_hook)
+  normalized.variant_body = Boolean(config.variant_body)
+  normalized.variant_crop = config.variant_crop !== false
+  normalized.variant_color = Boolean(config.variant_color)
+  normalized.variant_mirror = Boolean(config.variant_mirror)
+  // Frame mixing belongs to the legacy transformer and is intentionally disabled in V2.
+  normalized.variant_frame_mix = false
+  normalized.variant_blend_enabled = Boolean(config.enable_variants && config.variant_blend_enabled)
+  // Ignore stale paths when the optional blend is off so they cannot invalidate a task.
+  normalized.variant_blend_path = normalized.variant_blend_enabled ? String(config.variant_blend_path || '').trim() : ''
+  const blendOpacity = config.variant_blend_opacity == null ? Number.NaN : Number(config.variant_blend_opacity)
+  normalized.variant_blend_opacity = Number.isFinite(blendOpacity)
+    ? Math.max(0.01, Math.min(0.15, blendOpacity))
+    : 0.03
+  normalized.variant_blend_eof = ['loop', 'freeze', 'error'].includes(config.variant_blend_eof) ? config.variant_blend_eof : 'loop'
   if (config.bgm_tracks) {
     normalized.bgm_tracks = Object.fromEntries(Object.entries(config.bgm_tracks).map(([scope, track]) => {
       const inactive = !track.enabled || !track.path.trim()

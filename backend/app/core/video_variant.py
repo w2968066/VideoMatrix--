@@ -1,175 +1,179 @@
+"""Compatibility facade and standalone renderer for the deduplication V2 plan."""
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
-import random
-import re
 import subprocess
-import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import replace
 from pathlib import Path
-from fractions import Fraction
 from typing import Callable, Optional
 
-from .ffmpeg import FFMPEG, probe_media, run_process
+from .dedup_plan import Recipe, SegmentRecipe, build_recipe, normalize_filter, summary as recipe_summary
+from .ffmpeg import FFMPEG, FFPROBE, run_process
 from .hardware import session_for
-from .timeline import apply_timeline_totals, body_segment_specs
 
 
-VARIANT_VERSION = "creative-variant-v1"
-
-STRENGTHS = {
-    "mild": {
-        "zoom": (1.004, 1.012), "rotate": (0.04, 0.14), "brightness": (0.002, 0.008),
-        "contrast": (0.992, 1.012), "saturation": (0.992, 1.015), "gamma": (0.995, 1.008),
-        "noise": (0.25, 0.7), "mix": (0.012, 0.025), "mirror_chance": 0.18,
-        "audio_gain": 0.12, "audio_eq": 0.18,
-    },
-    "balanced": {
-        "zoom": (1.008, 1.024), "rotate": (0.08, 0.28), "brightness": (0.004, 0.014),
-        "contrast": (0.982, 1.025), "saturation": (0.982, 1.032), "gamma": (0.99, 1.015),
-        "noise": (0.5, 1.25), "mix": (0.02, 0.045), "mirror_chance": 0.35,
-        "audio_gain": 0.25, "audio_eq": 0.35,
-    },
-    "strong": {
-        "zoom": (1.014, 1.038), "rotate": (0.14, 0.48), "brightness": (0.007, 0.022),
-        "contrast": (0.965, 1.04), "saturation": (0.965, 1.05), "gamma": (0.98, 1.025),
-        "noise": (0.8, 2.0), "mix": (0.035, 0.07), "mirror_chance": 0.5,
-        "audio_gain": 0.4, "audio_eq": 0.55,
-    },
-}
-
-
-@dataclass(frozen=True)
-class SegmentVariant:
-    index: int
-    start: float
-    duration: float
-    enabled: bool
-    mirror: bool
-    zoom: float
-    offset_x: float
-    offset_y: float
-    rotation_degrees: float
-    brightness: float
-    contrast: float
-    saturation: float
-    gamma: float
-    noise: float
-    sharpen: float
-    frame_mix: float
-    audio_gain_db: float
-    audio_eq_db: float
-    audio_eq_hz: int
+# The recipe format is V2. Random-cover selection deliberately keeps using the
+# original seed namespace below so enabling V2 does not reshuffle first frames.
+VARIANT_VERSION = "creative-variant-v2"
+_SEED_NAMESPACE = "creative-variant-v1"
+_MAX_SEGMENTS = 32
+_PROBE_TIMEOUT_SECONDS = 30.0
 
 
 def derive_variant_seed(base_seed: int, task_name: str, output_index: int) -> int:
-    value = f"{VARIANT_VERSION}:{base_seed}:{task_name}:{output_index}".encode("utf-8")
+    value = f"{_SEED_NAMESPACE}:{base_seed}:{task_name}:{output_index}".encode("utf-8")
     return int.from_bytes(hashlib.sha256(value).digest()[:8], "big")
 
 
 def parse_resolution(config: dict) -> tuple[int, int]:
-    value = str(config.get("resolution", "1440*2560")).lower().replace("*", "x")
+    value = str(config.get("resolution", "1080*1920")).lower().replace("*", "x")
     parts = value.split("x")
     return int(parts[0]), int(parts[1])
 
 
-def build_variant_plan(config: dict, seed: int) -> list[SegmentVariant]:
-    strength = str(config.get("variant_strength", "balanced"))
-    limits = STRENGTHS.get(strength, STRENGTHS["balanced"])
-    rng = random.Random(seed)
-    t_hook = float(config["t_hook"])
-    normalized = dict(config)
-    apply_timeline_totals(normalized)
-    body_durations = [
-        spec["clip_duration"]
-        for spec in body_segment_specs(normalized)
-        for _ in range(spec["clip_count"])
-    ]
-    if '_body_clip_durations' in config:
-        body_durations = list(config['_body_clip_durations'])
-    width, height = parse_resolution(config)
-    aspect = height / width
-    plan: list[SegmentVariant] = []
-    start = 0.0
+class VariantPlan(tuple):
+    """Tuple-compatible legacy plan that retains its source Recipe for summary."""
 
-    for index, duration in enumerate([t_hook] + body_durations):
-        enabled = bool(config.get("variant_hook", True) if index == 0 else config.get("variant_body", True))
-        mirror = enabled and bool(config.get("variant_mirror", True)) and rng.random() < limits["mirror_chance"]
-        signed = lambda span: rng.uniform(-span, span)
-        rotation = signed(rng.uniform(*limits["rotate"])) if enabled else 0.0
-        zoom = rng.uniform(*limits["zoom"]) if enabled else 1.0
-        if enabled:
-            radians = abs(rotation) * math.pi / 180.0
-            safe_zoom = max(
-                math.cos(radians) + aspect * math.sin(radians),
-                math.cos(radians) + math.sin(radians) / aspect,
-            ) + 0.002
-            zoom = max(zoom, safe_zoom)
-        plan.append(SegmentVariant(
-            index=index,
-            start=round(start, 6),
-            duration=round(duration, 6),
-            enabled=enabled,
-            mirror=mirror,
-            zoom=round(zoom, 6),
-            offset_x=round(rng.random(), 6),
-            offset_y=round(rng.random(), 6),
-            rotation_degrees=round(rotation, 6),
-            brightness=round(signed(rng.uniform(*limits["brightness"])), 6) if enabled else 0.0,
-            contrast=round(rng.uniform(*limits["contrast"]), 6) if enabled else 1.0,
-            saturation=round(rng.uniform(*limits["saturation"]), 6) if enabled else 1.0,
-            gamma=round(rng.uniform(*limits["gamma"]), 6) if enabled else 1.0,
-            noise=round(rng.uniform(*limits["noise"]), 6) if enabled else 0.0,
-            sharpen=round(signed(0.18 if strength != "strong" else 0.28), 6) if enabled else 0.0,
-            frame_mix=(
-                round(rng.uniform(*limits["mix"]), 6)
-                if enabled and config.get("variant_frame_mix", True) else 0.0
-            ),
-            audio_gain_db=round(signed(limits["audio_gain"]), 6) if enabled else 0.0,
-            audio_eq_db=round(signed(limits["audio_eq"]), 6) if enabled else 0.0,
-            audio_eq_hz=rng.choice((180, 320, 640, 1200, 2400, 4800)),
-        ))
-        start += duration
-    return plan
+    def __new__(cls, recipe: Recipe):
+        result = super().__new__(cls, recipe.segments)
+        result.recipe = recipe
+        return result
 
 
-def summarize_variant_plan(plan: list[SegmentVariant], seed: int) -> dict:
-    enabled = [item for item in plan if item.enabled]
-    return {
-        "version": VARIANT_VERSION,
-        "seed": seed,
-        "segments": len(enabled),
-        "mirrored": sum(item.mirror for item in enabled),
-        "frame_mixed": sum(item.frame_mix > 0 for item in enabled),
-        "parameters": [asdict(item) for item in plan],
-    }
+def build_variant_plan(config: dict, seed: int) -> tuple[SegmentRecipe, ...]:
+    """Keep the old API while returning the real V2 segment recipes."""
+    return VariantPlan(build_recipe(config, seed))
+
+
+def summarize_variant_plan(plan, seed: int) -> dict:
+    """Summarize either a V2 Recipe or the segment tuple returned above."""
+    if isinstance(plan, Recipe):
+        recipe = replace(plan, seed=seed)
+    elif isinstance(getattr(plan, "recipe", None), Recipe):
+        recipe = replace(plan.recipe, seed=seed)
+    else:
+        width, height = parse_resolution({})
+        recipe = Recipe(
+            version=VARIANT_VERSION,
+            seed=seed,
+            width=width,
+            height=height,
+            segments=tuple(plan),
+            warnings=(),
+        )
+    result = recipe_summary(recipe)
+    result.setdefault("version", recipe.version)
+    result.setdefault("seed", seed)
+    return result
 
 
 class VideoVariantProcessor:
+    """Render the V2 plan to a separate file, or adapt it to the legacy API."""
+
     @staticmethod
     def inline_filters(config: dict, seed: int, video_label: str, audio_label: str | None):
-        """Apply existing effects after compositing, without an intermediate lossy encode."""
-        plan = build_variant_plan(config, seed)
-        summary = summarize_variant_plan(plan, seed)
-        if not any(item.enabled for item in plan):
-            return '', video_label, audio_label, summary
-        width, height = parse_resolution(config)
-        filters, video_out, audio_out = VideoVariantProcessor._build_filters(
-            plan, width, height, str(config.get('fps', '24')), bool(audio_label),
+        raise RuntimeError(
+            "旧 inline_filters 已停用；宿主应在每个原始片段的 scale/crop 处融合 V2 滤镜"
         )
-        # Filter outputs (unlike input streams) need explicit split/asplit consumers.
-        filters = re.sub(r'\[([va]\w*)\]', r'[variant_\1]', filters)
-        prefix = f"{video_label}split={len(plan)}" + ''.join(f'[variant_src_v{i}]' for i in range(len(plan))) + ';'
-        if audio_label:
-            prefix += f"{audio_label}asplit={len(plan)}" + ''.join(f'[variant_src_a{i}]' for i in range(len(plan))) + ';'
-        for i in range(len(plan)):
-            filters = filters.replace('[0:v]', f'[variant_src_v{i}]', 1)
-            filters = filters.replace('[0:a]', f'[variant_src_a{i}]', 1)
-        return prefix + filters, '[variant_vout]', '[variant_aout]' if audio_out else None, summary
+
+    def process_to_file(
+        self,
+        input_path: str,
+        output_path: str,
+        config: dict,
+        seed: int,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_process: Callable[[Optional[subprocess.Popen]], None] | None = None,
+    ) -> tuple[bool, str | None, dict]:
+        """Render without replacing the source or overwriting an existing output."""
+        source = Path(input_path)
+        destination = Path(output_path)
+        temporary: Path | None = None
+        summary: dict = {}
+
+        try:
+            if self._same_path(source, destination):
+                return False, "输入和输出路径不能相同", {}
+            if destination.exists():
+                return False, "输出文件已存在", {}
+            if is_cancelled and is_cancelled():
+                return False, "已停止", {}
+            if bool(config.get("variant_blend_enabled", False)):
+                return False, "独立文件模式暂不支持B混合", {}
+
+            source_info = self._probe_media(str(source), is_cancelled, on_process)
+            streams = source_info.get("streams", [])
+            video_stream, video_ordinal = self._main_video(streams)
+            if video_stream is None:
+                return False, "输入文件没有可用的视频轨", {}
+            if self._is_hdr(video_stream):
+                return False, "独立文件模式暂不支持HDR视频", {}
+
+            duration = self._video_duration(source_info, video_stream)
+            if duration <= 0:
+                return False, "输入视频时长无效", {}
+
+            recipe = self._build_recipe_for_input(config, seed, duration, video_stream)
+            if len(recipe.segments) > _MAX_SEGMENTS:
+                return False, f"独立文件模式最多支持{_MAX_SEGMENTS}个片段（更多片段会同时打开较多解码器）", recipe_summary(recipe)
+            summary = recipe_summary(recipe)
+            summary.setdefault("version", recipe.version)
+            summary.setdefault("seed", seed)
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(
+                f".{destination.name}.variant-{uuid.uuid4().hex}.tmp"
+            )
+            if not recipe.segments or not any(segment.enabled for segment in recipe.segments):
+                # A disabled recipe is an exact file copy; preserve all streams and metadata.
+                import shutil
+
+                shutil.copy2(source, temporary)
+            else:
+                base, tail, audio_reference = self._build_render_command(
+                    source, temporary, source_info, video_ordinal, recipe, config,
+                )
+                ok, error = session_for(config).run(
+                    base, tail, "成品变换", is_cancelled, on_process,
+                    runner=lambda full_command: self._run(full_command, is_cancelled, on_process),
+                )
+                if not ok:
+                    self._unlink_with_retry(temporary)
+                    return False, error or "变体处理失败", summary
+                if is_cancelled and is_cancelled():
+                    self._unlink_with_retry(temporary)
+                    return False, "已停止", summary
+                self._validate_output(
+                    str(temporary), source_info, recipe, audio_reference,
+                    is_cancelled, on_process,
+                )
+
+            if is_cancelled and is_cancelled():
+                self._unlink_with_retry(temporary)
+                return False, "已停止", summary
+            if not temporary.is_file() or temporary.stat().st_size <= 0:
+                self._unlink_with_retry(temporary)
+                return False, "变体输出校验失败", summary
+            self._commit_new_file(temporary, destination)
+            temporary = None
+            return True, None, summary
+        except InterruptedError as exc:
+            if temporary is not None:
+                self._unlink_with_retry(temporary)
+            return False, str(exc) or "已停止", summary
+        except (OSError, RuntimeError, ValueError, TypeError, TimeoutError, json.JSONDecodeError) as exc:
+            if temporary is not None:
+                self._unlink_with_retry(temporary)
+            return False, str(exc), summary
+        except Exception as exc:
+            if temporary is not None:
+                self._unlink_with_retry(temporary)
+            return False, str(exc), summary
 
     def process(
         self,
@@ -179,62 +183,315 @@ class VideoVariantProcessor:
         is_cancelled: Callable[[], bool] | None = None,
         on_process: Callable[[Optional[subprocess.Popen]], None] | None = None,
     ) -> tuple[bool, str | None, dict]:
-        plan = build_variant_plan(config, seed)
-        summary = summarize_variant_plan(plan, seed)
-        if not any(item.enabled for item in plan):
-            return True, None, summary
-
-        info = probe_media(input_path)
-        if not info:
-            return False, "无法探测基础成片", summary
-        has_audio = any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
-        width, height = self._resolution(config)
-        fps = str(config.get("fps", "24"))
-        total_duration = sum(item.duration for item in plan)
-        filter_complex, video_label, audio_label = self._build_filters(
-            plan, width, height, fps, has_audio,
-        )
-
+        """Legacy adapter: build beside the host output, then replace it atomically."""
         source = Path(input_path)
-        # Keep work files out of media-library scans and Explorer video counts.
-        # The explicit muxer below lets FFmpeg write MP4 data to a .tmp file.
-        temp_path = source.with_name(f".{source.stem}.variant-{uuid.uuid4().hex[:8]}.tmp")
-        base_cmd = [
-            FFMPEG, "-y", "-i", str(source), "-filter_complex", filter_complex,
-            "-map", video_label,
-        ]
-        if audio_label:
-            base_cmd.extend(["-map", audio_label, "-c:a", "aac", "-b:a", "192k"])
-        base_cmd.extend([
-            "-r", fps, "-b:v", str(config.get("bitrate", "8000k")),
-            "-t", f"{total_duration:.3f}", "-map_metadata", "-1", "-movflags", "+faststart",
-        ])
-
-        fps_number = float(Fraction(fps))
-        gop = max(12, int(round(fps_number * random.Random(seed).uniform(1.5, 2.8))))
-        ok, error = session_for(config).run(
-            base_cmd, ["-g", str(gop), "-f", "mp4", str(temp_path)], '成品变换',
-            is_cancelled, on_process,
-            runner=lambda command: self._run(command, is_cancelled, on_process),
+        if not source.is_file():
+            return False, "基础成片不存在", {}
+        if bool(config.get("variant_blend_enabled", False)):
+            return False, "独立文件模式暂不支持B混合", {}
+        temporary = source.with_name(f".{source.name}.variant-{uuid.uuid4().hex}.tmp")
+        ok, error, summary = self.process_to_file(
+            str(source), str(temporary), config, seed, is_cancelled, on_process,
         )
         if not ok:
-            self._unlink_with_retry(temp_path)
+            self._unlink_with_retry(temporary)
             return False, error, summary
-
-        checked = probe_media(str(temp_path))
-        if not checked or not temp_path.exists() or temp_path.stat().st_size < 1024:
-            self._unlink_with_retry(temp_path)
-            return False, "变体输出校验失败", summary
+        if is_cancelled and is_cancelled():
+            self._unlink_with_retry(temporary)
+            return False, "已停止", summary
         try:
-            self._replace_with_retry(temp_path, source)
+            self._replace_with_retry(temporary, source)
             return True, None, summary
         except OSError as exc:
-            self._unlink_with_retry(temp_path)
+            self._unlink_with_retry(temporary)
             return False, str(exc), summary
 
     @staticmethod
+    def _build_recipe_for_input(
+        config: dict, seed: int, duration: float, video_stream: dict | None = None,
+    ) -> Recipe:
+        normalized = dict(config)
+        if not normalized.get("resolution") and video_stream:
+            width = int(video_stream.get("width") or 0)
+            height = int(video_stream.get("height") or 0)
+            if width > 0 and height > 0:
+                if VideoVariantProcessor._rotation_swaps_dimensions(video_stream):
+                    width, height = height, width
+                normalized["resolution"] = f"{max(2, width // 2 * 2)}*{max(2, height // 2 * 2)}"
+        if "t_hook" not in normalized and "total_clips" not in normalized:
+            normalized["t_hook"] = duration
+            normalized["total_clips"] = 1
+            normalized["t_body"] = 0.0
+        recipe = build_recipe(normalized, seed)
+        if not recipe.segments:
+            normalized.update({"t_hook": duration, "total_clips": 1, "t_body": 0.0})
+            recipe = build_recipe(normalized, seed)
+
+        cursor = 0.0
+        fitted: list[SegmentRecipe] = []
+        for segment in recipe.segments:
+            remaining = duration - cursor
+            if remaining <= 0.000001:
+                break
+            segment_duration = min(max(0.0, float(segment.duration)), remaining)
+            if segment_duration <= 0.000001:
+                continue
+            fitted.append(replace(segment, start=round(cursor, 9), duration=round(segment_duration, 9)))
+            cursor += segment_duration
+        if fitted and cursor < duration - 0.000001:
+            fitted[-1] = replace(fitted[-1], duration=round(fitted[-1].duration + duration - cursor, 9))
+        fitted_recipe = replace(recipe, segments=tuple(fitted))
+        return fitted_recipe
+
+    @staticmethod
+    def _build_render_command(
+        source: Path,
+        temporary: Path,
+        source_info: dict,
+        video_ordinal: int,
+        recipe: Recipe,
+        config: dict,
+    ) -> tuple[list[str], list[str], list[dict]]:
+        inputs: list[str] = []
+        filters: list[str] = []
+        for index, segment in enumerate(recipe.segments):
+            inputs.extend([
+                "-ss", f"{segment.start:.9f}", "-t", f"{segment.duration:.9f}", "-threads", "2",
+                "-i", str(source),
+            ])
+            normalized = normalize_filter(recipe, segment)
+            if not normalized or not math.isfinite(float(segment.duration)):
+                raise ValueError("V2滤镜配方无效")
+            filters.append(
+                f"[{index}:v:{video_ordinal}]setpts=PTS-STARTPTS,{normalized}[variant_v{index}]"
+            )
+        concat_inputs = "".join(f"[variant_v{index}]" for index in range(len(recipe.segments)))
+        filters.append(f"{concat_inputs}concat=n={len(recipe.segments)}:v=1:a=0[variant_vout]")
+
+        audio_input = len(recipe.segments)
+        base = [FFMPEG, "-y", *inputs, "-threads", "2", "-i", str(source), "-filter_complex", ";".join(filters),
+                "-map", "[variant_vout]", "-map", f"{audio_input}:a?", "-map_metadata", str(audio_input),
+                "-map_chapters", str(audio_input), "-c:a", "copy", "-copyts", "-copytb", "1",
+                "-avoid_negative_ts", "disabled", "-movflags", "+faststart"]
+        tail = ["-b:v", str(config.get("bitrate", "8000k")), "-f", "mp4", str(temporary)]
+        video_stream, _ = VideoVariantProcessor._main_video(source_info.get("streams", []))
+        if video_stream and abs(VideoVariantProcessor._rotation_degrees(video_stream)) > 0.01:
+            tail[0:0] = ["-metadata:s:v:0", "rotate=0"]
+        audio_reference = [stream for stream in source_info.get("streams", []) if stream.get("codec_type") == "audio"]
+        return base, tail, audio_reference
+
+    @staticmethod
+    def _validate_output(
+        output_path: str,
+        source_info: dict,
+        recipe: Recipe,
+        audio_reference: list[dict],
+        is_cancelled: Callable[[], bool] | None,
+        on_process: Callable[[Optional[subprocess.Popen]], None] | None,
+    ) -> None:
+        checked = VideoVariantProcessor._probe_media(output_path, is_cancelled, on_process)
+        streams = checked.get("streams", [])
+        output_video, _ = VideoVariantProcessor._main_video(streams)
+        if output_video is None:
+            raise RuntimeError("变体输出缺少视频轨")
+        if int(output_video.get("width") or 0) != recipe.width or int(output_video.get("height") or 0) != recipe.height:
+            raise RuntimeError("变体输出尺寸校验失败")
+
+        input_video, _ = VideoVariantProcessor._main_video(source_info.get("streams", []))
+        input_duration = VideoVariantProcessor._video_duration(source_info, input_video)
+        output_duration = VideoVariantProcessor._video_duration(checked, output_video)
+        fps = VideoVariantProcessor._fps_value(input_video or {})
+        duration_tolerance = max(0.15, 2.0 / fps if fps > 0 else 0.15)
+        if output_duration <= 0 or abs(output_duration - input_duration) > duration_tolerance:
+            raise RuntimeError("变体输出时长校验失败")
+
+        output_audio = [stream for stream in streams if stream.get("codec_type") == "audio"]
+        if len(output_audio) != len(audio_reference):
+            raise RuntimeError("变体输出音轨数量校验失败")
+        for index, (before, after) in enumerate(zip(audio_reference, output_audio), start=1):
+            for key in ("codec_name", "sample_rate", "channels"):
+                if str(before.get(key, "")) != str(after.get(key, "")):
+                    raise RuntimeError(f"变体输出第{index}条音轨{key}校验失败")
+            before_start = VideoVariantProcessor._number(before.get("start_time"), 0.0)
+            after_start = VideoVariantProcessor._number(after.get("start_time"), 0.0)
+            if abs(before_start - after_start) > 0.05:
+                raise RuntimeError(f"变体输出第{index}条音轨起始时间校验失败")
+            before_duration = VideoVariantProcessor._number(before.get("duration"), 0.0)
+            after_duration = VideoVariantProcessor._number(after.get("duration"), 0.0)
+            if before_duration > 0 and after_duration > 0 and abs(before_duration - after_duration) > 0.12:
+                raise RuntimeError(f"变体输出第{index}条音轨时长校验失败")
+
+        before_frames = VideoVariantProcessor._optional_int(input_video.get("nb_frames"))
+        after_frames = VideoVariantProcessor._optional_int(output_video.get("nb_frames"))
+        if before_frames and after_frames and abs(before_frames - after_frames) > max(2, round(fps * 0.08)):
+            raise RuntimeError("变体输出帧数校验失败")
+
+    @staticmethod
+    def _probe_output(
+        command: list[str],
+        is_cancelled: Callable[[], bool] | None = None,
+        on_process: Callable[[Optional[subprocess.Popen]], None] | None = None,
+        timeout: float = _PROBE_TIMEOUT_SECONDS,
+    ) -> str:
+        if is_cancelled and is_cancelled():
+            raise InterruptedError("已停止")
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        deadline = time.monotonic() + timeout
+        try:
+            if on_process:
+                on_process(process)
+            while True:
+                if is_cancelled and is_cancelled():
+                    raise InterruptedError("已停止")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("媒体探测超时")
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if is_cancelled and is_cancelled():
+                raise InterruptedError("已停止")
+            if process.returncode != 0:
+                raise RuntimeError("媒体探测失败：" + (stderr.strip()[-400:] or str(process.returncode)))
+            return stdout
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            if process.stdout or process.stderr:
+                process.communicate()
+            if on_process:
+                on_process(None)
+
+    @staticmethod
+    def _probe_media(
+        path: str,
+        is_cancelled: Callable[[], bool] | None = None,
+        on_process: Callable[[Optional[subprocess.Popen]], None] | None = None,
+    ) -> dict:
+        output = VideoVariantProcessor._probe_output([
+            FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path,
+        ], is_cancelled, on_process)
+        try:
+            result = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("媒体探测结果无效") from exc
+        if not isinstance(result, dict):
+            raise RuntimeError("媒体探测结果无效")
+        return result
+
+    @staticmethod
+    def _main_video(streams: list[dict]) -> tuple[dict | None, int]:
+        ordinal = 0
+        for stream in streams:
+            if stream.get("codec_type") != "video":
+                continue
+            current = ordinal
+            ordinal += 1
+            if int((stream.get("disposition") or {}).get("attached_pic", 0) or 0) != 1:
+                return stream, current
+        return None, -1
+
+    @staticmethod
+    def _rotation_degrees(stream: dict) -> float:
+        for item in stream.get("side_data_list") or []:
+            if "display matrix" in str(item.get("side_data_type", "")).lower() and item.get("rotation") is not None:
+                try:
+                    value = float(item["rotation"])
+                    if math.isfinite(value):
+                        return value
+                except (TypeError, ValueError):
+                    pass
+        try:
+            value = float((stream.get("tags") or {}).get("rotate", 0))
+            return value if math.isfinite(value) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _rotation_swaps_dimensions(stream: dict) -> bool:
+        rotation = VideoVariantProcessor._rotation_degrees(stream) % 360.0
+        return min(abs(rotation - 90.0), abs(rotation - 270.0)) <= 1.0
+
+    @staticmethod
+    def _is_hdr(stream: dict) -> bool:
+        transfer = str(stream.get("color_transfer", "")).lower()
+        if transfer in {"smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"}:
+            return True
+        return any(
+            any(marker in str(item.get("side_data_type", "")).lower() for marker in (
+                "mastering display", "content light", "dynamic hdr", "hdr10",
+            ))
+            for item in stream.get("side_data_list", [])
+        )
+
+    @staticmethod
+    def _video_duration(info: dict, video: dict | None) -> float:
+        if video:
+            value = VideoVariantProcessor._number(video.get("duration"), 0.0)
+            if value > 0:
+                return value
+        return VideoVariantProcessor._number((info.get("format") or {}).get("duration"), 0.0)
+
+    @staticmethod
+    def _fps_value(stream: dict) -> float:
+        for key in ("avg_frame_rate", "r_frame_rate"):
+            value = str(stream.get(key) or "")
+            try:
+                if "/" in value:
+                    numerator, denominator = value.split("/", 1)
+                    result = float(numerator) / float(denominator)
+                else:
+                    result = float(value)
+                if math.isfinite(result) and result > 0:
+                    return result
+            except (ValueError, ZeroDivisionError):
+                pass
+        return 0.0
+
+    @staticmethod
+    def _number(value, fallback: float) -> float:
+        try:
+            result = float(value)
+            return result if math.isfinite(result) else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _optional_int(value) -> int | None:
+        try:
+            result = int(value)
+            return result if result > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _same_path(source: Path, destination: Path) -> bool:
+        try:
+            return os.path.normcase(str(source.resolve())) == os.path.normcase(str(destination.resolve()))
+        except OSError:
+            return os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(destination))
+
+    @staticmethod
+    def _commit_new_file(temporary: Path, destination: Path) -> None:
+        # A same-directory hard link is atomic and fails if another process
+        # created the destination after the initial existence check.
+        os.link(temporary, destination)
+        VideoVariantProcessor._unlink_with_retry(temporary)
+
+    @staticmethod
     def _replace_with_retry(temp_path: Path, destination: Path, attempts: int = 24, delay: float = 0.25):
-        """Replace a completed output after transient Windows file locks clear."""
+        """Replace a completed host output after transient Windows file locks clear."""
         last_error: OSError | None = None
         for attempt in range(attempts):
             try:
@@ -256,73 +513,6 @@ class VideoVariantProcessor:
             except OSError:
                 if attempt + 1 < attempts:
                     time.sleep(delay)
-
-    @staticmethod
-    def _resolution(config: dict) -> tuple[int, int]:
-        return parse_resolution(config)
-
-    @staticmethod
-    def _build_filters(
-        plan: list[SegmentVariant],
-        width: int,
-        height: int,
-        fps: str,
-        has_audio: bool,
-    ) -> tuple[str, str, str | None]:
-        filters: list[str] = []
-        for item in plan:
-            end = item.start + item.duration
-            video = (
-                f"[0:v]trim=start={item.start:.6f}:end={end:.6f},setpts=PTS-STARTPTS,"
-                f"tpad=stop_mode=clone:stop_duration=0.12,trim=duration={item.duration:.6f}"
-            )
-            if item.enabled:
-                if item.mirror:
-                    video += ",hflip"
-                scaled_w = math.ceil(width * item.zoom / 2) * 2
-                scaled_h = math.ceil(height * item.zoom / 2) * 2
-                max_x = max(0, scaled_w - width)
-                max_y = max(0, scaled_h - height)
-                crop_x = round(max_x * item.offset_x, 3)
-                crop_y = round(max_y * item.offset_y, 3)
-                radians = item.rotation_degrees * math.pi / 180.0
-                video += (
-                    f",scale={scaled_w}:{scaled_h},"
-                    f"rotate={radians:.9f}:ow=iw:oh=ih:fillcolor=black,"
-                    f"crop={width}:{height}:{crop_x}:{crop_y},"
-                    f"eq=brightness={item.brightness}:contrast={item.contrast}:"
-                    f"saturation={item.saturation}:gamma={item.gamma},"
-                    f"noise=alls={item.noise}:allf=t+u,"
-                    f"unsharp=5:5:{item.sharpen}:5:5:0"
-                )
-                if item.frame_mix > 0:
-                    scale = 1.0 / (1.0 + item.frame_mix)
-                    video += f",tmix=frames=2:weights='1 {item.frame_mix}':scale={scale:.8f}"
-            video += f",fps={fps},setsar=1,format=yuv420p[v{item.index}]"
-            filters.append(video)
-
-            if has_audio:
-                audio = (
-                    f"[0:a]atrim=start={item.start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS,"
-                    "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-                    f"apad=pad_dur={item.duration:.6f},atrim=duration={item.duration:.6f}"
-                )
-                if item.enabled:
-                    audio += (
-                        f",highpass=f=28,lowpass=f=19000,"
-                        f"equalizer=f={item.audio_eq_hz}:t=q:w=1:g={item.audio_eq_db},"
-                        f"volume={item.audio_gain_db}dB"
-                    )
-                audio += f"[a{item.index}]"
-                filters.append(audio)
-
-        if has_audio:
-            concat = "".join(f"[v{i}][a{i}]" for i in range(len(plan)))
-            filters.append(f"{concat}concat=n={len(plan)}:v=1:a=1[vout][aout]")
-            return ";".join(filters), "[vout]", "[aout]"
-        concat = "".join(f"[v{i}]" for i in range(len(plan)))
-        filters.append(f"{concat}concat=n={len(plan)}:v=1:a=0[vout]")
-        return ";".join(filters), "[vout]", None
 
     @staticmethod
     def _run(
