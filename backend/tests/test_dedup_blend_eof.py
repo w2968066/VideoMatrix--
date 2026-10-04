@@ -39,15 +39,20 @@ class BlendLoopEOFTests(unittest.TestCase):
                                            variant_blend_eof=mode, variant_blend_opacity=.15,
                                            total_duration=2, t_hook=1, resolution='64*48', fps=24), probe_media)
                 graph, label = blend.filters(1, '[0:v]')
-                frames = subprocess.check_output([
-                    FFMPEG, '-v', 'error', '-i', str(self.main), *blend.input_args(),
-                    '-filter_complex', graph + f';{label}select=eq(n\\,6)+eq(n\\,11)+eq(n\\,18)[sample]',
-                    '-map', '[sample]', '-an', '-vsync', '0', '-frames:v', '3',
+                sampled = subprocess.run([
+                    FFMPEG, '-nostdin', '-v', 'error', '-i', str(self.main), *blend.input_args(),
+                    # Export this tiny CFR fixture, then sample exact frame
+                    # indices. Avoid legacy -vsync and inferring encoder timing
+                    # from three nonuniform timestamps on another FFmpeg build.
+                    '-filter_complex', graph, '-map', label, '-an', '-r', '24',
+                    '-frames:v', '48', '-c:v', 'rawvideo', '-threads:v', '1',
                     '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-',
-                ])
+                ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+                self.assertEqual(sampled.returncode, 0, sampled.stderr.decode('utf-8', 'replace'))
+                frames = sampled.stdout
                 size = 64 * 48 * 3 // 2
-                self.assertEqual(len(frames), size * 3)
-                early, last, repeated = (frames[i * size:(i+1) * size] for i in range(3))
+                self.assertEqual(len(frames), size * 48)
+                early, last, repeated = (frames[i * size:(i+1) * size] for i in (6, 11, 18))
                 self.assertTrue(early != last, 'fixture must have distinct moving frames')
                 expected = early if mode == 'loop' else last
                 self.assertTrue(repeated == expected, f'{mode} must use B video EOF, not its audio tail')
